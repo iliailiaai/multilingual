@@ -7,8 +7,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-OPENROUTER_MODEL = "qwen/qwen3-next-80b-a3b-instruct:free"
-RETRY_WAIT_SECONDS = 80
+OPENROUTER_MODEL = "google/gemma-4-31b-it:free"
+RETRY_WAIT_SECONDS = 10
 
 
 class GenerateOutput():
