@@ -138,7 +138,7 @@ def main(
     lm = VLLMModel(
         model=eval_model, temperature=0.6, max_tokens=4096, 
         tensor_parallel_size=tp, gpu_memory_utilization=gpu_mem, max_model_len=6000)
-    gpt = OpenAIModel('gpt-4o-mini', temperature=0.6, max_tokens=14000)
+    gpt = OpenAIModel(temperature=0.6, max_tokens=14000)
 
     if domain == "music":
         templates = music_genQA_prompts

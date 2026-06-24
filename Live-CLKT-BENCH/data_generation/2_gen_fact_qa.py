@@ -112,7 +112,7 @@ def main(training_docs_dir, output_dir, source_lang, test_languages, domain):
     else:
         raise ValueError("domain must be 'music' or 'movie'")
 
-    model = OpenAIModel("gpt-4o-mini", temperature=0.8, max_tokens=15000)
+    model = OpenAIModel(temperature=0.8, max_tokens=15000)
     time_stamp = os.path.basename(training_docs_dir)
 
     lang_docs_dir = os.path.join(training_docs_dir, source_lang)

@@ -118,7 +118,7 @@ def main(entity_file, output_dir, test_languages, domain):
 
     for source_lang in test_languages:
         print(f"\n=== Generating {domain} docs for language: {source_lang} ===")
-        model = OpenAIModel('gpt-4o-mini', temperature=0.8, max_tokens=14000)
+        model = OpenAIModel(temperature=0.8, max_tokens=14000)
 
         save_dir = os.path.join(output_dir, time_stamp, source_lang)
         os.makedirs(save_dir, exist_ok=True)

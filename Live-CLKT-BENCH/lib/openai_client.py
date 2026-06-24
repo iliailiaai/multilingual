@@ -6,6 +6,10 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+OPENROUTER_MODEL = "qwen/qwen3-next-80b-a3b-instruct:free"
+RETRY_WAIT_SECONDS = 80
+
 
 class GenerateOutput():
     def __init__(self, text: List[str]):
@@ -15,19 +19,22 @@ class GenerateOutput():
 class OpenAIModel:
     def __init__(
         self,
-        model: str,
-        temperature: float,
+        model: str = OPENROUTER_MODEL,
+        temperature: float = 0.8,
         max_tokens: int = 2048,
         api_key: str = None
     ):
-        self.model = model
+        self.model = OPENROUTER_MODEL
         self.temperature = temperature
         self.max_tokens = max_tokens
 
         if api_key is None:
             api_key = os.getenv("OPENAI_API_KEY")
 
-        self.client = OpenAI(api_key=api_key)
+        self.client = OpenAI(
+            api_key=api_key,
+            base_url=OPENROUTER_BASE_URL,
+        )
 
     def generate(
         self,
@@ -58,15 +65,18 @@ class OpenAIModel:
                 return GenerateOutput(text=texto)
 
             except Exception as e:
-                print(f"Error: {e}, retrying in {i}s...")
-                time.sleep(i)
+                print(
+                    f"Error: {e}, retrying in {RETRY_WAIT_SECONDS}s "
+                    f"({i}/{retry})..."
+                )
+                time.sleep(RETRY_WAIT_SECONDS)
 
         raise RuntimeError(f"Failed after {retry} retries")
 
 
 if __name__ == "__main__":
     model = OpenAIModel(
-        model="gpt-4o-mini",
+        model=OPENROUTER_MODEL,
         temperature=0.8,
         max_tokens=9999
     )
