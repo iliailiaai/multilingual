@@ -2,7 +2,7 @@ import os
 import json
 from tqdm import tqdm
 from dotenv import load_dotenv
-from sports_client import SportsDBClient, get_baseball_event_details, get_soccer_event_stats
+from sports_client import SportsDBClient, get_soccer_event_stats, parse_baseball_result
 import argparse
 
 load_dotenv()
@@ -48,7 +48,12 @@ def fetch_events(lang, start_date, end_date, max_games):
 
         try:
             if config["sport"] == "baseball":
-                match_details = get_baseball_event_details(sports_client.api_key, match_id)
+                match_details = {
+                    "venue": e.get("strVenue"),
+                    "home_team": e.get("strHomeTeam"),
+                    "away_team": e.get("strAwayTeam"),
+                    "parsed_result": parse_baseball_result(e.get("strResult", "")),
+                }
             elif config["sport"] == "soccer":
                 match_details = get_soccer_event_stats(sports_client.api_key, match_id)
         except Exception as err:

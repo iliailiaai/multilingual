@@ -8,7 +8,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 RETRY_WAIT_SECONDS = 80
+CONNECTION_RETRY_WAIT_SECONDS = 5
 REQUEST_TIMEOUT_SECONDS = 30
+REQUEST_PAUSE_SECONDS = 0.2
 
 
 def _request_json(api_key: str, endpoint: str, params: dict, retry: int = 5) -> dict:
@@ -37,10 +39,10 @@ def _request_json(api_key: str, endpoint: str, params: dict, retry: int = 5) -> 
                 return {}
 
             print(
-                f"[SportsDBClient] error: {e}; waiting {RETRY_WAIT_SECONDS}s "
+                f"[SportsDBClient] error: {e}; waiting {CONNECTION_RETRY_WAIT_SECONDS}s "
                 f"({attempt}/{retry})..."
             )
-            time.sleep(RETRY_WAIT_SECONDS)
+            time.sleep(CONNECTION_RETRY_WAIT_SECONDS)
 
     return {}
 
@@ -107,27 +109,22 @@ class SportsDBClient:
         """
         start = datetime.strptime(start_date, "%Y-%m-%d").date()
         end = datetime.strptime(end_date, "%Y-%m-%d").date()
+        current = start
         all_events = []
 
-        for season in self._season_strings_for_range(start, end, sport):
-            season_events = self.get_events_by_season(league, season)
-            print(f"[SportsDBClient] got {len(season_events)} raw events for league {league}, season {season}")
+        while current <= end and len(all_events) < max_events:
+            date_str = current.isoformat()
+            daily_events = self.get_events_by_date(date_str, league, window=0)
+            if daily_events:
+                print(f"[SportsDBClient] got {len(daily_events)} events for {date_str}")
+                all_events.extend(daily_events)
+            else:
+                print(f"[SportsDBClient] no events for {date_str}")
 
-            for event in season_events:
-                date_str = event.get("dateEvent")
-                if not date_str:
-                    continue
-
-                try:
-                    event_date = datetime.strptime(date_str, "%Y-%m-%d").date()
-                except ValueError:
-                    continue
-
-                if start <= event_date <= end:
-                    all_events.append(event)
-
-            if len(all_events) >= max_events + 20:
+            current += timedelta(days=1)
+            if len(all_events) >= max_events:
                 break
+            time.sleep(REQUEST_PAUSE_SECONDS)
 
         # 去重複
         seen = set()
@@ -137,6 +134,8 @@ class SportsDBClient:
             if event_id and event_id not in seen:
                 seen.add(event_id)
                 unique_events.append(event)
+            if len(unique_events) >= max_events:
+                break
 
         return unique_events
 

@@ -5,7 +5,7 @@ cd "$(dirname "$0")/.."
 
 START=2025-06-01
 END=2026-06-10
-MAX_E=10
+MAX_E=50
 
 PYTHONPATH=lib python3 data_generation/0_collect_entity.py \
     --domain sports \
