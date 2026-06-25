@@ -9,11 +9,11 @@ load_dotenv()
 
 # ===================== CONFIG =====================
 SEARCH_CONFIG = {
-    "en": {"keyword": "mlb highlight", "league": "MLB", "sport": "baseball"},
-    "zh": {"keyword": "中華職棒精華", "league": "Chinese Professional Baseball League", "sport": "baseball"},
-    "ja": {"keyword": "日本プロ野球ハイライト", "league": "Nippon Baseball League", "sport": "baseball"},
-    "fr": {"keyword": "Ligue 1 3ème journée highlight", "league": "French Ligue 1", "sport": "soccer"},
-    "es": {"keyword": "LaLiga highlights", "league": "Spanish La Liga", "sport": "soccer"}
+    "en": {"keyword": "mlb highlight", "league": "MLB", "league_id": "4424", "sport": "baseball"},
+    "zh": {"keyword": "中華職棒精華", "league": "Chinese Professional Baseball League", "league_id": "5111", "sport": "baseball"},
+    "ja": {"keyword": "日本プロ野球ハイライト", "league": "Nippon Baseball League", "league_id": "4591", "sport": "baseball"},
+    "fr": {"keyword": "Ligue 1 3ème journée highlight", "league": "French Ligue 1", "league_id": "4334", "sport": "soccer"},
+    "es": {"keyword": "LaLiga highlights", "league": "Spanish La Liga", "league_id": "4335", "sport": "soccer"}
 }
 
 LEAGUE_TIMEZONE = {
@@ -29,8 +29,17 @@ def fetch_events(lang, start_date, end_date, max_games):
     config = SEARCH_CONFIG[lang]
     sports_client = SportsDBClient(api_key=os.getenv("SPORTSDB_API_KEY", "1"))
 
-    print(f"Fetching events for {config['league']} ({config['sport']}) from {start_date} to {end_date}...")
-    events = sports_client.get_events_by_range(start_date, end_date, config["league"], max_games)
+    print(
+        f"Fetching events for {config['league']} ({config['sport']}, "
+        f"id={config['league_id']}) from {start_date} to {end_date}..."
+    )
+    events = sports_client.get_events_by_range(
+        start_date,
+        end_date,
+        config["league_id"],
+        max_games,
+        config["sport"],
+    )
     results = []
 
     for e in tqdm(events):
@@ -74,7 +83,7 @@ def fetch_events(lang, start_date, end_date, max_games):
 
 
         results.append({
-            "title": f"{e.get("strEvent")} ({e.get("dateEvent")})",
+            "title": f"{e.get('strEvent')} ({e.get('dateEvent')})",
             "game_info": game_info, 
             "language": lang
         })
