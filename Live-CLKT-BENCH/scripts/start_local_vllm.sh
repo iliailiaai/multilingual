@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MODEL=Qwen/Qwen2.5-7B-Instruct
+CUDA_VISIBLE_DEVICES=4
+
+MODEL=Qwen/Qwen3.5-35B-A3B
 SERVED_MODEL_NAME=local-model
 HOST=0.0.0.0
 PORT=8000

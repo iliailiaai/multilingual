@@ -169,7 +169,7 @@ class OpenAIModel:
 
 if __name__ == "__main__":
     model = OpenAIModel(
-        model=OPENROUTER_MODEL,
+        model=LOCAL_MODEL,
         temperature=0.8,
         max_tokens=9999
     )

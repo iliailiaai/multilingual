@@ -8,7 +8,7 @@ END=2026-06-10
 STAMP="${START}_${END}"
 LANGUAGES="en ja fr es zh"
 SOURCE_LANG=en
-LLM_PROVIDER=openrouter
+LLM_PROVIDER=local
 
 PYTHONPATH=lib python3 data_generation/2_gen_fact_qa.py \
     --domain sports \

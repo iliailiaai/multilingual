@@ -7,7 +7,7 @@ START=2025-06-01
 END=2026-06-10
 STAMP="${START}_${END}"
 LANGUAGES="en ja fr es zh"
-LLM_PROVIDER=openrouter
+LLM_PROVIDER=local
 
 PYTHONPATH=lib python3 data_generation/1_gen_train_docs.py \
     --domain sports \
