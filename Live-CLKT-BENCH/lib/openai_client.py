@@ -170,10 +170,7 @@ class OpenAIModel:
 if __name__ == "__main__":
     model = OpenAIModel(
         model=LOCAL_MODEL,
-<<<<<<< HEAD
-=======
         provider='local',
->>>>>>> 5d7ff6a (shared cpt)
         temperature=0.8,
         max_tokens=9999
     )
