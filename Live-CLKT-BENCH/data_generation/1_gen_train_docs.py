@@ -10,6 +10,7 @@ from prompts import music_genQA_prompts, movie_genQA_prompts, sports_genQA_promp
 def get_train_doc(model, unit, lang, domain, templates):
     print(f"Translating Doc to {lang}")
     target_lang = "zh-tw" if lang == "zh" else lang
+    title = unit.get("title", "untitled")
 
     # --- Domain unit unpacking ---
     if domain == "music":
@@ -31,7 +32,8 @@ def get_train_doc(model, unit, lang, domain, templates):
                     description=unit.get("description", ""),
                     lang=target_lang
                 ),
-                response_format={"type": "json_object"}
+                response_format={"type": "json_object"},
+                json_context=f"{domain}:train_doc:{title}:{lang}",
             )
             trans = json.loads(output.text[0])
             translated_doc = templates.DOC_TEMPLATE.format(
@@ -81,7 +83,8 @@ def get_train_doc(model, unit, lang, domain, templates):
 
             output = model.generate(
                 prompt=sss,
-                response_format={"type": "json_object"}
+                response_format={"type": "json_object"},
+                json_context=f"{domain}:train_doc:{title}:{lang}",
             )
 
             print(output.text[0])
@@ -100,7 +103,16 @@ def get_train_doc(model, unit, lang, domain, templates):
 
 
 
-def main(entity_file, output_dir, test_languages, domain):
+def main(
+    entity_file,
+    output_dir,
+    test_languages,
+    domain,
+    llm_provider,
+    llm_model,
+    json_error_dir,
+    json_retry,
+):
     if domain == "music":
         templates = music_genQA_prompts
     elif domain == "movie":
@@ -118,7 +130,14 @@ def main(entity_file, output_dir, test_languages, domain):
 
     for source_lang in test_languages:
         print(f"\n=== Generating {domain} docs for language: {source_lang} ===")
-        model = OpenAIModel(temperature=0.8, max_tokens=14000)
+        model = OpenAIModel(
+            temperature=0.8,
+            max_tokens=14000,
+            provider=llm_provider,
+            model=llm_model,
+            json_error_dir=json_error_dir,
+            json_retry=json_retry,
+        )
 
         save_dir = os.path.join(output_dir, time_stamp, source_lang)
         os.makedirs(save_dir, exist_ok=True)
@@ -161,6 +180,10 @@ if __name__ == '__main__':
         default=["en", "ja", "fr", "es", "zh"],
         help="List of test language codes"
     )
+    parser.add_argument("--llm_provider", type=str, choices=["openrouter", "local"], default="openrouter")
+    parser.add_argument("--llm_model", type=str, default=None)
+    parser.add_argument("--json_error_dir", type=str, default="test_data/json_errors")
+    parser.add_argument("--json_retry", type=int, default=3)
     args = parser.parse_args()
 
     main(
@@ -168,4 +191,8 @@ if __name__ == '__main__':
         args.output_dir,
         args.test_languages,
         args.domain,
+        args.llm_provider,
+        args.llm_model,
+        args.json_error_dir,
+        args.json_retry,
     )

@@ -82,23 +82,21 @@ def is_known_entity(entity_name, doc_text, lm, gpt, templates, verbose=True):
         print("\n[Prompt to Judge]")
         print(check_prompt)
 
-    out = gpt.generate(
-        prompt=check_prompt,
-        response_format={"type": "json_object"}
-    )
-
-    raw_output = out.text[0]
-
-    if verbose:
-        print("\n[Judge Raw Output]")
-        print(raw_output)
-
     try:
-        obj = json.loads(raw_output)
+        out = gpt.generate(
+            prompt=check_prompt,
+            response_format={"type": "json_object"},
+            json_context=f"known_entity_check:{entity_name}",
+        )
+        obj = json.loads(out.text[0])
     except Exception as e:
         if verbose:
             print("[ERROR] Failed to parse JSON:", e)
         return False
+
+    if verbose:
+        print("\n[Judge Parsed Output]")
+        print(json.dumps(obj, ensure_ascii=False, indent=2))
 
     is_known = obj.get("is_known", False)
 
@@ -132,13 +130,24 @@ def main(
     domain:str,
     tp:int,
     gpu_mem:float,
+    llm_provider:str,
+    llm_model:str,
+    json_error_dir:str,
+    json_retry:int,
     seed:int=204,
 ):
     
     lm = VLLMModel(
         model=eval_model, temperature=0.6, max_tokens=4096, 
         tensor_parallel_size=tp, gpu_memory_utilization=gpu_mem, max_model_len=6000)
-    gpt = OpenAIModel(temperature=0.6, max_tokens=14000)
+    gpt = OpenAIModel(
+        temperature=0.6,
+        max_tokens=14000,
+        provider=llm_provider,
+        model=llm_model,
+        json_error_dir=json_error_dir,
+        json_retry=json_retry,
+    )
 
     if domain == "music":
         templates = music_genQA_prompts
@@ -262,6 +271,10 @@ if __name__ == "__main__":
     parser.add_argument("--domain", type=str, default=None)
     parser.add_argument("--tp", type=int, default=1)
     parser.add_argument("--gpu_mem", type=float, default=0.9)
+    parser.add_argument("--llm_provider", type=str, choices=["openrouter", "local"], default="openrouter")
+    parser.add_argument("--llm_model", type=str, default=None)
+    parser.add_argument("--json_error_dir", type=str, default="test_data/json_errors")
+    parser.add_argument("--json_retry", type=int, default=3)
     args = parser.parse_args()
 
     main(
@@ -273,5 +286,9 @@ if __name__ == "__main__":
         args.eval_model,
         args.domain,
         args.tp,
-        args.gpu_mem
+        args.gpu_mem,
+        args.llm_provider,
+        args.llm_model,
+        args.json_error_dir,
+        args.json_retry
     )

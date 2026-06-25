@@ -3,6 +3,8 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+LLM_PROVIDER=openrouter
+
 PYTHONPATH=lib python3 data_generation/3_gen_cl-kt_additional_check.py \
     --factqa_dir test_data/factQA/sports/2026-03-01_2026-04-10 \
     --training_docs_dir test_data/train_docs/sports/2026-03-01_2026-04-10 \
@@ -12,4 +14,5 @@ PYTHONPATH=lib python3 data_generation/3_gen_cl-kt_additional_check.py \
     --eval_model Qwen/Qwen2.5-3B-Instruct \
     --domain sports \
     --tp 1 \
-    --gpu_mem 0.9
+    --gpu_mem 0.9 \
+    --llm_provider "${LLM_PROVIDER}"
