@@ -52,7 +52,7 @@ def evaluate(model, dataloader):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_name", type=str, required=True)
-    parser.add_argument("--train_file", type=str, required=True)
+    parser.add_argument("--train_file", type=str, nargs="+", required=True)
     # parser.add_argument("--val_file", type=str, required=True)
     parser.add_argument("--output_dir", type=str, required=True)
     parser.add_argument("--batch_size", type=int, default=2)
@@ -134,6 +134,9 @@ def main():
     model.print_trainable_parameters()
 
     train_dataset = load_dataset("json", data_files=args.train_file, split="train")
+    print(f"Loaded {len(train_dataset)} training rows from:")
+    for train_file in args.train_file:
+        print(f"  - {train_file}")
     # val_dataset = load_dataset("json", data_files=args.val_file, split="train")
 
     print("Using preprocess function.")
