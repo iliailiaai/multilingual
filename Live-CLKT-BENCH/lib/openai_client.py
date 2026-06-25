@@ -85,6 +85,11 @@ class OpenAIModel:
                 if response_format and self.provider != "local":
                     kwargs["response_format"] = response_format
 
+                if self.provider == "local":
+                    kwargs["extra_body"] = {
+                        "chat_template_kwargs": {"enable_thinking": False},
+                    }
+
                 response = self.client.chat.completions.create(**kwargs)
 
                 texto = [choice.message.content for choice in response.choices]
