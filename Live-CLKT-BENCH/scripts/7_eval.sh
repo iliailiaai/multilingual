@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 TRAIN_LANG=en
-MODEL_DIR_NAME=Qwen2.5-1.5B-Instruct
+MODEL_DIR_NAME=Qwen/Qwen3-1.7B
 CKPT=checkpoint-epoch-3
 
 python3 demo_experiment/eval.py \

@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 TRAIN_LANG=en
-MODEL_DIR_NAME=Qwen2.5-1.5B-Instruct
+MODEL_DIR_NAME=Qwen/Qwen3-1.7B
 MODEL_DIR="test_models/combined/${TRAIN_LANG}/${MODEL_DIR_NAME}"
 
 PYTHONPATH=lib python3 demo_experiment/lora_inference.py \

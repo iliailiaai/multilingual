@@ -4,8 +4,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 TRAIN_LANG=en
-MODEL_NAME=Qwen/Qwen2.5-1.5B-Instruct
-MODEL_DIR_NAME=Qwen2.5-1.5B-Instruct
+MODEL_NAME=Qwen/Qwen3-1.7B
+MODEL_DIR_NAME=Qwen/Qwen3-1.7B
 
 python3 demo_experiment/cpt.py \
     --model_name "${MODEL_NAME}" \
