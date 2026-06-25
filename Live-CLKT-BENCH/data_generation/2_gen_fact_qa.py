@@ -137,7 +137,7 @@ def main(
 
     model = OpenAIModel(
         temperature=0.8,
-        max_tokens=15000,
+        max_tokens=12000,
         provider=llm_provider,
         model=llm_model,
         json_error_dir=json_error_dir,

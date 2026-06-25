@@ -3,6 +3,8 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+export CUDA_VISIBLE_DEVICES=3
+
 TRAIN_LANG=en
 MODEL_NAME=Qwen/Qwen3-1.7B
 MODEL_DIR_NAME=Qwen/Qwen3-1.7B
@@ -14,7 +16,7 @@ python3 demo_experiment/cpt.py \
         "test_data/benchmark/movie/${TRAIN_LANG}/train_doc.jsonl" \
         "test_data/benchmark/music/${TRAIN_LANG}/train_doc.jsonl" \
     --output_dir "test_models/combined/${TRAIN_LANG}/${MODEL_DIR_NAME}" \
-    --batch_size 1 \
+    --batch_size 32 \
     --learning_rate 5e-4 \
     --num_train_epochs 3 \
     --gradient_accumulation_steps 2 \
