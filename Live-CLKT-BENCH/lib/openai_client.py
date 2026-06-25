@@ -8,7 +8,7 @@ load_dotenv()
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 OPENROUTER_MODEL = "google/gemma-4-31b-it:free"
-RETRY_WAIT_SECONDS = 10
+RETRY_WAIT_SECONDS = 20
 
 
 class GenerateOutput():
@@ -40,7 +40,7 @@ class OpenAIModel:
         self,
         prompt: str,
         num_return_sequences: int = 1,
-        retry: int = 10,
+        retry: int = 30,
         response_format: dict = None,
     ) -> GenerateOutput:
 
