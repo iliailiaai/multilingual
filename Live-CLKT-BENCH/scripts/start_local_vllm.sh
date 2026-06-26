@@ -10,8 +10,11 @@ PORT=8000
 TENSOR_PARALLEL_SIZE=1
 GPU_MEMORY_UTILIZATION=0.9
 MAX_MODEL_LEN=16384
+CUDAGRAPH_NUM_WARMUPS=4
+COMPILATION_CONFIG="{\"cudagraph_num_of_warmups\":${CUDAGRAPH_NUM_WARMUPS},\"cudagraph_capture_sizes\":[1,16],\"compile_sizes\":[\"cudagraph_capture_sizes\"]}"
 
 echo "Starting vLLM on CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
+echo "Using compilation config: ${COMPILATION_CONFIG}"
 
 vllm serve "${MODEL}" \
     --served-model-name "${SERVED_MODEL_NAME}" \
@@ -19,4 +22,5 @@ vllm serve "${MODEL}" \
     --port "${PORT}" \
     --tensor-parallel-size "${TENSOR_PARALLEL_SIZE}" \
     --gpu-memory-utilization "${GPU_MEMORY_UTILIZATION}" \
-    --max-model-len "${MAX_MODEL_LEN}"
+    --max-model-len "${MAX_MODEL_LEN}" \
+    --compilation-config "${COMPILATION_CONFIG}"
