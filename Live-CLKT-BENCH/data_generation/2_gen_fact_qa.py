@@ -1,6 +1,7 @@
 import json
 import os
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 from openai_client import OpenAIModel
 from prompts import music_genQA_prompts, movie_genQA_prompts, sports_genQA_prompts
@@ -34,7 +35,7 @@ def verify_qa(model, meta_data: str, qa_item: dict, templates, context: str):
 
 
 
-def gen_FactQA(model, knowledge, source_lang, langs, templates, save_dir):
+def gen_FactQA(model, knowledge, source_lang, langs, templates, save_dir, show_progress=True):
     FactQA = {}
     entity_name = os.path.basename(save_dir)
     # --- Generate Source-Language QA ---
@@ -59,11 +60,14 @@ def gen_FactQA(model, knowledge, source_lang, langs, templates, save_dir):
         verified_qa = []
         verification_logs = []
 
-        for idx, item in enumerate(tqdm(
-            qa.get("QA", []),
-            desc=f"Verifying QA: {entity_name}",
-            leave=False,
-        )):
+        qa_items = qa.get("QA", [])
+        if show_progress:
+            qa_items = tqdm(
+                qa_items,
+                desc=f"Verifying QA: {entity_name}",
+                leave=False,
+            )
+        for idx, item in enumerate(qa_items):
             log_entry = verify_qa(
                 model,
                 knowledge,
@@ -89,7 +93,10 @@ def gen_FactQA(model, knowledge, source_lang, langs, templates, save_dir):
 
     # --- Translate ---
     qa_str = json.dumps({"QA": FactQA[source_lang]}, ensure_ascii=False)
-    for lang in tqdm(langs, desc=f"Translating QA: {entity_name}", leave=False):
+    lang_iter = langs
+    if show_progress:
+        lang_iter = tqdm(langs, desc=f"Translating QA: {entity_name}", leave=False)
+    for lang in lang_iter:
         if lang == source_lang:
             continue
         lang_key = "zh" if lang.startswith("zh") else lang
@@ -119,6 +126,24 @@ def gen_FactQA(model, knowledge, source_lang, langs, templates, save_dir):
     return FactQA
 
 
+def process_doc(model, doc_fn, lang_docs_dir, output_dir, time_stamp, source_lang, test_languages, templates, show_progress):
+    with open(os.path.join(lang_docs_dir, doc_fn), "r", encoding="utf-8") as f:
+        train_docs = json.load(f)
+    knowledge_text = train_docs["fact_source"]
+
+    save_dir = os.path.join(
+        output_dir, f"{time_stamp}",
+        os.path.splitext(doc_fn)[0]
+    )
+    os.makedirs(save_dir, exist_ok=True)
+    gen_FactQA(
+        model, knowledge_text, source_lang,
+        test_languages, templates, save_dir,
+        show_progress=show_progress,
+    )
+    return doc_fn
+
+
 
 def main(
     training_docs_dir,
@@ -130,6 +155,7 @@ def main(
     llm_model,
     json_error_dir,
     json_retry,
+    workers,
 ):
     if domain == "music":
         templates = music_genQA_prompts
@@ -152,20 +178,42 @@ def main(
 
     lang_docs_dir = os.path.join(training_docs_dir, source_lang)
     doc_files = sorted(os.listdir(lang_docs_dir))
-    for doc_fn in tqdm(doc_files, desc=f"{domain} FactQA docs ({source_lang})"):
-        with open(os.path.join(lang_docs_dir, doc_fn), "r", encoding="utf-8") as f:
-            train_docs = json.load(f)
-        knowledge_text = train_docs["fact_source"]
-
-        save_dir = os.path.join(
-            output_dir, f"{time_stamp}", 
-            os.path.splitext(doc_fn)[0]
-        )
-        os.makedirs(save_dir, exist_ok=True)
-        gen_FactQA(
-            model, knowledge_text, source_lang, 
-            test_languages, templates, save_dir
-        )
+    if workers <= 1:
+        for doc_fn in tqdm(doc_files, desc=f"{domain} FactQA docs ({source_lang})"):
+            process_doc(
+                model,
+                doc_fn,
+                lang_docs_dir,
+                output_dir,
+                time_stamp,
+                source_lang,
+                test_languages,
+                templates,
+                show_progress=True,
+            )
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = [
+                executor.submit(
+                    process_doc,
+                    model,
+                    doc_fn,
+                    lang_docs_dir,
+                    output_dir,
+                    time_stamp,
+                    source_lang,
+                    test_languages,
+                    templates,
+                    False,
+                )
+                for doc_fn in doc_files
+            ]
+            for future in tqdm(
+                as_completed(futures),
+                total=len(futures),
+                desc=f"{domain} FactQA docs ({source_lang})",
+            ):
+                future.result()
 
 
 
@@ -180,6 +228,7 @@ if __name__ == "__main__":
     parser.add_argument("--llm_model", type=str, default=None)
     parser.add_argument("--json_error_dir", type=str, default="test_data/json_errors")
     parser.add_argument("--json_retry", type=int, default=3)
+    parser.add_argument("--workers", type=int, default=1)
     args = parser.parse_args()
 
     main(
@@ -192,4 +241,5 @@ if __name__ == "__main__":
         args.llm_model,
         args.json_error_dir,
         args.json_retry,
+        args.workers,
     )

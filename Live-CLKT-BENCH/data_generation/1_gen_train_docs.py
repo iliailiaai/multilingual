@@ -3,6 +3,8 @@ import os
 import argparse
 import re
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from tqdm import tqdm
 from openai_client import OpenAIModel
 from prompts import music_genQA_prompts, movie_genQA_prompts, sports_genQA_prompts
 
@@ -174,6 +176,23 @@ def get_train_doc(model, unit, lang, domain, templates):
     return translated_doc
 
 
+def process_unit(model, unit, idx, total, save_dir, source_lang, domain, templates):
+    title = unit.get('title', f"untitled_{idx}")
+    safe_title = "".join(c if c.isalnum() or c in " -_()" else "_" for c in title)
+    save_path = os.path.join(save_dir, f"{safe_title}.json")
+
+    if os.path.exists(save_path):
+        print(f"[{idx+1}/{total}] Skipping existing: {safe_title}")
+        return "skipped"
+
+    print(f"[{idx+1}/{total}] {domain.capitalize()} | {safe_title} | Lang={source_lang}")
+    doc = get_train_doc(model, unit, source_lang, domain, templates)
+
+    with open(save_path, 'w', encoding='utf-8') as f:
+        json.dump({"fact_source": doc}, f, indent=2, ensure_ascii=False)
+    return "saved"
+
+
 
 def main(
     entity_file,
@@ -184,6 +203,7 @@ def main(
     llm_model,
     json_error_dir,
     json_retry,
+    workers,
 ):
     if domain == "music":
         templates = music_genQA_prompts
@@ -213,21 +233,32 @@ def main(
 
         save_dir = os.path.join(output_dir, time_stamp, source_lang)
         os.makedirs(save_dir, exist_ok=True)
-        
-        for idx, unit in enumerate(units):
-            title = unit.get('title', f"untitled_{idx}")
-            safe_title = "".join(c if c.isalnum() or c in " -_()" else "_" for c in title)
-            save_path = os.path.join(save_dir, f"{safe_title}.json")
 
-            if os.path.exists(save_path):
-                print(f"[{idx+1}/{len(units)}] Skipping existing: {safe_title}")
-                continue
-
-            print(f"[{idx+1}/{len(units)}] {domain.capitalize()} | {safe_title} | Lang={source_lang}")
-            doc = get_train_doc(model, unit, source_lang, domain, templates)
-
-            with open(save_path, 'w', encoding='utf-8') as f:
-                json.dump({"fact_source": doc}, f, indent=2, ensure_ascii=False)
+        if workers <= 1:
+            for idx, unit in enumerate(units):
+                process_unit(model, unit, idx, len(units), save_dir, source_lang, domain, templates)
+        else:
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                futures = [
+                    executor.submit(
+                        process_unit,
+                        model,
+                        unit,
+                        idx,
+                        len(units),
+                        save_dir,
+                        source_lang,
+                        domain,
+                        templates,
+                    )
+                    for idx, unit in enumerate(units)
+                ]
+                for future in tqdm(
+                    as_completed(futures),
+                    total=len(futures),
+                    desc=f"{domain} docs ({source_lang})",
+                ):
+                    future.result()
 
 
 
@@ -256,6 +287,7 @@ if __name__ == '__main__':
     parser.add_argument("--llm_model", type=str, default=None)
     parser.add_argument("--json_error_dir", type=str, default="test_data/json_errors")
     parser.add_argument("--json_retry", type=int, default=3)
+    parser.add_argument("--workers", type=int, default=1)
     args = parser.parse_args()
 
     main(
@@ -267,4 +299,5 @@ if __name__ == '__main__':
         args.llm_model,
         args.json_error_dir,
         args.json_retry,
+        args.workers,
     )
