@@ -1,8 +1,51 @@
 import json
 import os
 import argparse
+import re
+from datetime import datetime
 from openai_client import OpenAIModel
 from prompts import music_genQA_prompts, movie_genQA_prompts, sports_genQA_prompts
+
+SCHEMA_RETRY = 3
+
+
+class SchemaValidationError(ValueError):
+    pass
+
+
+def missing_keys(data, keys):
+    return [key for key in keys if key not in data]
+
+
+def warn_missing_translation(context, missing, attempt):
+    print(
+        f"[SCHEMA WARNING] {context}: missing keys {missing} "
+        f"(attempt {attempt}/{SCHEMA_RETRY})"
+    )
+
+
+def record_schema_error(model, raw_text, context, missing):
+    os.makedirs(model.json_error_dir, exist_ok=True)
+    stamp = datetime.utcnow().strftime("%Y%m%dT%H%M%S%f")
+    safe_context = re.sub(r"[^A-Za-z0-9_.-]+", "_", context).strip("_")[:120]
+    filename = f"{stamp}_{safe_context or 'schema_error'}_schema_error.txt"
+    path = os.path.join(model.json_error_dir, filename)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(f"Context: {context}\n")
+        f.write(f"Missing keys: {missing}\n\n")
+        f.write(raw_text)
+    print(f"[SCHEMA ERROR] Context: {context}")
+    print(f"[SCHEMA ERROR] Missing keys: {missing}")
+    print(f"[SCHEMA ERROR] Full raw response saved to: {path}")
+    return path
+
+
+def raise_schema_error(model, raw_text, context, missing):
+    path = record_schema_error(model, raw_text, context, missing)
+    raise SchemaValidationError(
+        f"Failed to validate translation schema for {context}; "
+        f"missing keys {missing}; raw response saved to {path}"
+    )
 
 
 
@@ -27,15 +70,29 @@ def get_train_doc(model, unit, lang, domain, templates):
             )
 
         else:
-            output = model.generate(
-                prompt=templates.DOC_TRANSLATE_TEMPLATE.format(
-                    description=unit.get("description", ""),
-                    lang=target_lang
-                ),
-                response_format={"type": "json_object"},
-                json_context=f"{domain}:train_doc:{title}:{lang}",
-            )
-            trans = json.loads(output.text[0])
+            context = f"{domain}:train_doc:{title}:{lang}"
+            trans = None
+            raw_text = ""
+            missing = []
+            for attempt in range(1, SCHEMA_RETRY + 1):
+                output = model.generate(
+                    prompt=templates.DOC_TRANSLATE_TEMPLATE.format(
+                        description=unit.get("description", ""),
+                        lang=target_lang
+                    ),
+                    response_format={"type": "json_object"},
+                    json_context=context,
+                )
+                raw_text = output.text[0]
+                trans = json.loads(raw_text)
+                missing = missing_keys(trans, ["Description"])
+                if not missing:
+                    break
+                warn_missing_translation(context, missing, attempt)
+
+            if trans is None or missing:
+                raise_schema_error(model, raw_text, context, missing)
+
             translated_doc = templates.DOC_TEMPLATE.format(
                 title=unit['title'],
                 date=unit["published_time"][:10],
@@ -81,14 +138,29 @@ def get_train_doc(model, unit, lang, domain, templates):
                     lang=target_lang
                 )
 
-            output = model.generate(
-                prompt=sss,
-                response_format={"type": "json_object"},
-                json_context=f"{domain}:train_doc:{title}:{lang}",
-            )
+            context = f"{domain}:train_doc:{title}:{lang}"
+            trans = None
+            raw_text = ""
+            missing = []
+            for attempt in range(1, SCHEMA_RETRY + 1):
+                output = model.generate(
+                    prompt=sss,
+                    response_format={"type": "json_object"},
+                    json_context=context,
+                )
 
-            print(output.text[0])
-            trans = json.loads(output.text[0])["translation"]
+                raw_text = output.text[0]
+                print(raw_text)
+                obj = json.loads(raw_text)
+                trans = obj.get("translation", {})
+                missing = missing_keys(trans, ["Cast", "Summary", "Synopsis"])
+                if not missing:
+                    break
+                warn_missing_translation(context, missing, attempt)
+
+            if trans is None or missing:
+                raise_schema_error(model, raw_text, context, missing)
+
             translated_doc = templates.DOC_TEMPLATE.format(
                 title=unit['title'],
                 casts=trans["Cast"],
