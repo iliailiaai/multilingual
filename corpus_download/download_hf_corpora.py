@@ -12,6 +12,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import json
 import logging
 import sys
+import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -54,9 +55,9 @@ LANGUAGES = [
     {"key": "et", "name": "Estonian", "iso3": "est", "fineweb2_config": "est_Latn"},
     {"key": "hu", "name": "Hungarian", "iso3": "hun", "fineweb2_config": "hun_Latn"},
     {"key": "tr", "name": "Turkish", "iso3": "tur", "fineweb2_config": "tur_Latn"},
-    {"key": "az", "name": "Azerbaijani", "iso3": "aze", "fineweb2_config": "aze_Latn"},
+    {"key": "az", "name": "Azerbaijani", "iso3": "aze", "fineweb2_config": "azj_Latn"},
     {"key": "kk", "name": "Kazakh", "iso3": "kaz", "fineweb2_config": "kaz_Cyrl"},
-    {"key": "uz", "name": "Uzbek", "iso3": "uzb", "fineweb2_config": "uzb_Latn"},
+    {"key": "uz", "name": "Uzbek", "iso3": "uzb", "fineweb2_config": "uzn_Latn"},
     {"key": "id", "name": "Indonesian", "iso3": "ind", "fineweb2_config": "ind_Latn"},
     {"key": "th", "name": "Thai", "iso3": "tha", "fineweb2_config": "tha_Thai"},
 ]
@@ -91,6 +92,7 @@ class CorpusResult:
     skipped_too_large: int
     completed: bool
     warning: str | None
+    error: str | None = None
 
 
 def build_specs(include_instruct: bool) -> list[CorpusSpec]:
@@ -104,6 +106,7 @@ def build_specs(include_instruct: bool) -> list[CorpusSpec]:
                     iso3="eng",
                     repo=FINEWEB_REPO,
                     data_files=f"hf://datasets/{FINEWEB_REPO}/sample/10BT/*.parquet",
+                    dataset_config="sample-10BT",
                     max_tokens=ENGLISH_TOKEN_CAP,
                     kind="pretrain",
                     hf_config="sample-10BT",
@@ -119,6 +122,7 @@ def build_specs(include_instruct: bool) -> list[CorpusSpec]:
                 iso3=language["iso3"],
                 repo=FINEWEB2_REPO,
                 data_files=f"hf://datasets/{FINEWEB2_REPO}/data/{config}/train/*.parquet",
+                dataset_config=config,
                 max_tokens=NON_ENGLISH_TOKEN_CAP,
                 kind="pretrain",
                 hf_config=config,
@@ -182,6 +186,7 @@ def parse_args() -> argparse.Namespace:
         help="Number of corpora to download in parallel. Each worker handles one corpus at a time.",
     )
     parser.add_argument("--log-every", type=int, default=10_000)
+    parser.add_argument("--stream-open-retries", type=int, default=3)
     return parser.parse_args()
 
 
@@ -226,12 +231,29 @@ def load_stream(spec: CorpusSpec, trust_remote_code: bool) -> Iterable[dict[str,
             trust_remote_code=trust_remote_code,
         )
 
-    return load_dataset(
-        "parquet",
-        data_files=spec.data_files,
-        split="train",
-        streaming=True,
-    )
+    try:
+        return load_dataset(
+            "parquet",
+            data_files=spec.data_files,
+            split="train",
+            streaming=True,
+        )
+    except ValueError as exc:
+        if "data_files are invalid" not in str(exc) or spec.dataset_config is None:
+            raise
+        logging.warning(
+            "%s: parquet path %s is not available; falling back to dataset config %s",
+            spec.key,
+            spec.data_files,
+            spec.dataset_config,
+        )
+        return load_dataset(
+            spec.repo,
+            spec.dataset_config,
+            split="train",
+            streaming=True,
+            trust_remote_code=trust_remote_code,
+        )
 
 
 def text_from_messages(messages: Any, tokenizer: Any) -> str:
@@ -309,6 +331,7 @@ def write_summary(log_file: Path, results: list[CorpusResult], args: argparse.Na
         "add_special_tokens_to_count": args.add_special_tokens_to_count,
         "tokenize_batch_size": args.tokenize_batch_size,
         "workers": args.workers,
+        "stream_open_retries": args.stream_open_retries,
         "output_dir": str(args.output_dir),
         "total_tokens": sum(result.token_count for result in results),
         "total_rows": sum(result.rows_written for result in results),
@@ -342,6 +365,33 @@ def select_specs(specs: list[CorpusSpec], requested: list[str]) -> list[CorpusSp
     if unknown:
         raise SystemExit(f"Unknown language/corpus key(s): {', '.join(unknown)}")
     return [spec for spec in specs if spec.key in selected_keys]
+
+
+def result_from_state(
+    spec: CorpusSpec,
+    args: argparse.Namespace,
+    error: Exception | str,
+) -> CorpusResult:
+    state_file = args.output_dir / f"{spec.key}.state.json"
+    state = read_state(state_file)
+    warning = f"{spec.key} failed: {error}"
+    return CorpusResult(
+        key=spec.key,
+        name=spec.name,
+        repo=spec.repo,
+        kind=spec.kind,
+        output_file=str(args.output_dir / f"{spec.key}.jsonl"),
+        max_tokens=spec.max_tokens,
+        min_tokens=int(spec.max_tokens * args.min_token_ratio),
+        token_count=int(state.get("token_count", 0)),
+        rows_written=int(state.get("rows_written", 0)),
+        rows_seen=int(state.get("rows_seen", 0)),
+        skipped_empty=int(state.get("skipped_empty", 0)),
+        skipped_too_large=int(state.get("skipped_too_large", 0)),
+        completed=False,
+        warning=warning,
+        error=str(error),
+    )
 
 
 def download_corpus(
@@ -381,7 +431,25 @@ def download_corpus(
         f"{token_count:,}",
     )
 
-    stream = load_stream(spec, args.trust_remote_code)
+    stream = None
+    for attempt in range(1, args.stream_open_retries + 1):
+        try:
+            stream = load_stream(spec, args.trust_remote_code)
+            break
+        except Exception:
+            if attempt >= args.stream_open_retries:
+                raise
+            sleep_seconds = min(60, 5 * attempt)
+            logging.exception(
+                "%s: failed to open stream on attempt %s/%s; retrying in %ss",
+                spec.key,
+                attempt,
+                args.stream_open_retries,
+                sleep_seconds,
+            )
+            time.sleep(sleep_seconds)
+    if stream is None:
+        raise RuntimeError(f"{spec.key}: failed to open stream")
     mode = "a" if args.resume and output_file.exists() else "w"
     completed = False
     pending: list[tuple[int, str]] = []
@@ -491,6 +559,7 @@ def download_corpus(
         skipped_too_large=skipped_too_large,
         completed=completed,
         warning=warning,
+        error=None,
     )
     write_json(state_file, {**asdict(result), "rows_seen": rows_seen})
     results.append(result)
@@ -540,7 +609,13 @@ def main() -> None:
         logging.info("Loading tokenizer: %s", args.tokenizer)
         tokenizer = AutoTokenizer.from_pretrained(args.tokenizer, trust_remote_code=args.trust_remote_code)
         for spec in selected_specs:
-            download_corpus(spec, tokenizer, args, log_file, results)
+            try:
+                download_corpus(spec, tokenizer, args, log_file, results)
+            except Exception as exc:
+                logging.exception("Corpus failed for %s; continuing with other corpora", spec.key)
+                result = result_from_state(spec, args, exc)
+                results.append(result)
+                write_summary(log_file, results, args)
     else:
         max_workers = min(args.workers, len(selected_specs))
         logging.info("Downloading %s corpora with %s workers", len(selected_specs), max_workers)
@@ -549,7 +624,11 @@ def main() -> None:
             futures = {executor.submit(download_corpus_worker, spec, args): spec for spec in selected_specs}
             for future in as_completed(futures):
                 spec = futures[future]
-                result = future.result()
+                try:
+                    result = future.result()
+                except Exception as exc:
+                    logging.exception("Worker failed for %s; continuing with other corpora", spec.key)
+                    result = result_from_state(spec, args, exc)
                 results.append(result)
                 results.sort(key=lambda item: order[item.key])
                 write_summary(log_file, results, args)
@@ -561,8 +640,16 @@ def main() -> None:
                 )
 
     write_summary(log_file, results, args)
+    failed = [result for result in results if result.error]
     warnings = [result.warning for result in results if result.warning]
-    if warnings:
+    if failed:
+        logging.error(
+            "Completed with %s failed corpus/corpora: %s. Re-run with --resume after fixing paths/network.",
+            len(failed),
+            ", ".join(result.key for result in failed),
+        )
+        raise SystemExit(1)
+    elif warnings:
         logging.warning("Completed with %s corpus warning(s). See %s", len(warnings), log_file)
     else:
         logging.info("Completed without token-count warnings. See %s", log_file)

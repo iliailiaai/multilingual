@@ -14,7 +14,9 @@ logger = logging.getLogger(__name__)
 
 LANGUAGE_ALIASES = {
     # FLORES+ can use individual ISO 639-3 codes for some macrolanguages.
+    "aze": ["aze", "azj"],
     "est": ["est", "ekk"],
+    "uzb": ["uzb", "uzn"],
 }
 
 
