@@ -139,6 +139,14 @@ class OpenAIModel:
             except json.JSONDecodeError:
                 pass
 
+        for repaired in self._json_repair_candidates(text):
+            try:
+                obj = json.loads(repaired)
+                print(f"[JSON REPAIR] Repaired JSON for {context}")
+                return obj
+            except json.JSONDecodeError:
+                continue
+
         path = self._record_json_error(text, context)
         preview = text.replace("\n", "\\n")[:500]
         print(f"[JSON ERROR] Context: {context}")
@@ -147,9 +155,7 @@ class OpenAIModel:
         raise JSONParseError(f"Failed to parse JSON for {context}; raw response saved to {path}")
 
     def _extract_json_candidate(self, text: str):
-        fenced = re.search(r"```(?:json)?\s*(.*?)```", text, flags=re.DOTALL | re.IGNORECASE)
-        if fenced:
-            text = fenced.group(1).strip()
+        text = self._strip_fenced_json(text)
 
         decoder = json.JSONDecoder()
         starts = [idx for idx, char in enumerate(text) if char in "{["]
@@ -160,6 +166,85 @@ class OpenAIModel:
             except json.JSONDecodeError:
                 continue
         return None
+
+    def _strip_fenced_json(self, text: str):
+        fenced = re.search(r"```(?:json)?\s*(.*?)```", text, flags=re.DOTALL | re.IGNORECASE)
+        if fenced:
+            return fenced.group(1).strip()
+        return text.strip()
+
+    def _json_repair_candidates(self, text: str):
+        sources = []
+        stripped = self._strip_fenced_json(text)
+        sources.append(stripped)
+
+        start = stripped.find("{")
+        end = stripped.rfind("}")
+        if start != -1 and end != -1 and start < end:
+            sources.append(stripped[start:end + 1])
+
+        seen = set()
+        for source in sources:
+            if source in seen:
+                continue
+            seen.add(source)
+
+            escaped = self._escape_control_chars_in_strings(source)
+            if escaped != source:
+                yield escaped
+
+            repaired_description = self._repair_description_json(source)
+            if repaired_description is not None:
+                yield repaired_description
+
+    def _escape_control_chars_in_strings(self, text: str):
+        result = []
+        in_string = False
+        escaped = False
+
+        for char in text:
+            if in_string:
+                if escaped:
+                    result.append(char)
+                    escaped = False
+                elif char == "\\":
+                    result.append(char)
+                    escaped = True
+                elif char == '"':
+                    result.append(char)
+                    in_string = False
+                elif char == "\n":
+                    result.append("\\n")
+                elif char == "\r":
+                    result.append("\\r")
+                elif char == "\t":
+                    result.append("\\t")
+                else:
+                    result.append(char)
+            else:
+                result.append(char)
+                if char == '"':
+                    in_string = True
+
+        return "".join(result)
+
+    def _repair_description_json(self, text: str):
+        text = self._strip_fenced_json(text)
+        match = re.match(r'\s*\{\s*"Description"\s*:\s*"', text, flags=re.DOTALL)
+        if not match:
+            return None
+
+        end = text.rfind("}")
+        if end == -1 or end <= match.end():
+            return None
+
+        value = text[match.end():end].strip()
+        if value.endswith(","):
+            value = value[:-1].rstrip()
+        if value.endswith('"'):
+            value = value[:-1]
+
+        return json.dumps({"Description": value}, ensure_ascii=False)
 
     def _record_json_error(self, text: str, context: str):
         os.makedirs(self.json_error_dir, exist_ok=True)
