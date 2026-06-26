@@ -11,7 +11,7 @@ TENSOR_PARALLEL_SIZE=1
 GPU_MEMORY_UTILIZATION=0.9
 MAX_MODEL_LEN=16384
 CUDAGRAPH_NUM_WARMUPS=4
-COMPILATION_CONFIG="{\"cudagraph_num_of_warmups\":${CUDAGRAPH_NUM_WARMUPS},\"cudagraph_capture_sizes\":[1,2,4,8,16,24,32],\"compile_sizes\":[\"cudagraph_capture_sizes\"]}"
+COMPILATION_CONFIG="{\"cudagraph_num_of_warmups\":${CUDAGRAPH_NUM_WARMUPS},\"cudagraph_capture_sizes\":[1,2],\"compile_sizes\":[\"cudagraph_capture_sizes\"]}"
 
 echo "Starting vLLM on CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
 echo "Using compilation config: ${COMPILATION_CONFIG}"

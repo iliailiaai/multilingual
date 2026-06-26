@@ -8,7 +8,7 @@ END=2026-06-10
 STAMP="${START}_${END}"
 LANGUAGES="en ja fr es zh German Dutch Russian Ukrainian Polish Czech Portuguese Italian Urdu Persian Irish Welsh Arabic Hebrew Finnish Estonian Hungarian Turkish Azerbaijani Kazakh Uzbek Indonesian Thai"
 LLM_PROVIDER=local
-WORKERS=16
+WORKERS=1
 
 PYTHONPATH=lib python3 data_generation/1_gen_train_docs.py \
     --domain sports \
