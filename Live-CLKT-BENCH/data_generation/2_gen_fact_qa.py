@@ -7,7 +7,11 @@ from openai_client import OpenAIModel
 from prompts import music_genQA_prompts, movie_genQA_prompts, sports_genQA_prompts
 
 
-def verify_qa(model, meta_data: str, qa_item: dict, templates, context: str):
+def log(message: str):
+    tqdm.write(message)
+
+
+def verify_qa(model, meta_data: str, qa_item: dict, templates, context: str, verbose: bool = True):
     """Return verdict + source sentence for logging."""
     prompt = templates.FACTQA_VERIFIER_PROMPT.format(
         meta_data=meta_data,
@@ -28,14 +32,24 @@ def verify_qa(model, meta_data: str, qa_item: dict, templates, context: str):
         "source": source
     }
 
-    print("QA Item:", json.dumps(qa_item, ensure_ascii=False))
-    print(f"Verification result: {verdict}")
-    print(f"Source: {source}")
+    if verbose:
+        log("QA Item: " + json.dumps(qa_item, ensure_ascii=False))
+        log(f"Verification result: {verdict}")
+        log(f"Source: {source}")
     return log_entry
 
 
 
-def gen_FactQA(model, knowledge, source_lang, langs, templates, save_dir, show_progress=True):
+def gen_FactQA(
+    model,
+    knowledge,
+    source_lang,
+    langs,
+    templates,
+    save_dir,
+    show_progress=True,
+    verbose=True,
+):
     FactQA = {}
     entity_name = os.path.basename(save_dir)
     # --- Generate Source-Language QA ---
@@ -43,11 +57,13 @@ def gen_FactQA(model, knowledge, source_lang, langs, templates, save_dir, show_p
     log_path = os.path.join(save_dir, f"{source_lang}_verification_log.json")
 
     if os.path.exists(src_path):
-        print(f"Loading existing {source_lang} QA from {src_path}")
+        if verbose:
+            log(f"Loading existing {source_lang} QA from {src_path}")
         with open(src_path, "r", encoding="utf-8") as f:
             FactQA[source_lang] = json.load(f)
     else:
-        print(f"Generating {source_lang} QA...")
+        if verbose:
+            log(f"Generating {source_lang} QA...")
         response = model.generate(
             prompt=templates.GEN_FACTQA_TEMPLATE.format(
                 meta_data=knowledge, lang=source_lang
@@ -74,6 +90,7 @@ def gen_FactQA(model, knowledge, source_lang, langs, templates, save_dir, show_p
                 item,
                 templates,
                 context=f"factqa_verify:{entity_name}:{source_lang}:{idx}",
+                verbose=verbose,
             )
             verification_logs.append(log_entry)
             if log_entry["verdict"].upper() == "SUPPORTED":
@@ -84,12 +101,14 @@ def gen_FactQA(model, knowledge, source_lang, langs, templates, save_dir, show_p
         # Save verified QA
         with open(src_path, "w", encoding="utf-8") as f:
             json.dump(verified_qa, f, indent=2, ensure_ascii=False)
-        print(f"Saved {source_lang} QA: {src_path}")
+        if verbose:
+            log(f"Saved {source_lang} QA: {src_path}")
 
         # Save verification logs
         with open(log_path, "w", encoding="utf-8") as f:
             json.dump(verification_logs, f, indent=2, ensure_ascii=False)
-        print(f"Saved verification log: {log_path}")
+        if verbose:
+            log(f"Saved verification log: {log_path}")
 
     # --- Translate ---
     qa_str = json.dumps({"QA": FactQA[source_lang]}, ensure_ascii=False)
@@ -103,12 +122,14 @@ def gen_FactQA(model, knowledge, source_lang, langs, templates, save_dir, show_p
         save_path = os.path.join(save_dir, f"{lang_key}QA.json")
 
         if os.path.exists(save_path):
-            print(f"Skipping {lang}, already exists: {save_path}")
+            if verbose:
+                log(f"Skipping {lang}, already exists: {save_path}")
             with open(save_path, "r", encoding="utf-8") as f:
                 FactQA[lang] = json.load(f)
             continue
 
-        print(f"Translating QA to {lang}")
+        if verbose:
+            log(f"Translating QA to {lang}")
         lang_code = "zh-tw" if lang == "zh" else lang
         response = model.generate(
             prompt=templates.FACTQA_TRANSLATE_TEMPLATE.format(
@@ -122,11 +143,23 @@ def gen_FactQA(model, knowledge, source_lang, langs, templates, save_dir, show_p
 
         with open(save_path, "w", encoding="utf-8") as f:
             json.dump(FactQA[lang], f, indent=2, ensure_ascii=False)
-        print(f"Saved {lang} QA: {save_path}")
+        if verbose:
+            log(f"Saved {lang} QA: {save_path}")
     return FactQA
 
 
-def process_doc(model, doc_fn, lang_docs_dir, output_dir, time_stamp, source_lang, test_languages, templates, show_progress):
+def process_doc(
+    model,
+    doc_fn,
+    lang_docs_dir,
+    output_dir,
+    time_stamp,
+    source_lang,
+    test_languages,
+    templates,
+    show_progress,
+    verbose,
+):
     with open(os.path.join(lang_docs_dir, doc_fn), "r", encoding="utf-8") as f:
         train_docs = json.load(f)
     knowledge_text = train_docs["fact_source"]
@@ -140,6 +173,7 @@ def process_doc(model, doc_fn, lang_docs_dir, output_dir, time_stamp, source_lan
         model, knowledge_text, source_lang,
         test_languages, templates, save_dir,
         show_progress=show_progress,
+        verbose=verbose,
     )
     return doc_fn
 
@@ -190,6 +224,7 @@ def main(
                 test_languages,
                 templates,
                 show_progress=True,
+                verbose=True,
             )
     else:
         with ThreadPoolExecutor(max_workers=workers) as executor:
@@ -205,6 +240,7 @@ def main(
                     test_languages,
                     templates,
                     False,
+                    False,
                 )
                 for doc_fn in doc_files
             ]
@@ -212,6 +248,9 @@ def main(
                 as_completed(futures),
                 total=len(futures),
                 desc=f"{domain} FactQA docs ({source_lang})",
+                dynamic_ncols=True,
+                position=0,
+                leave=True,
             ):
                 future.result()
 
