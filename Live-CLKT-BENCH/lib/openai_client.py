@@ -2,6 +2,7 @@ import os
 import time
 import json
 import re
+import threading
 from datetime import datetime
 from typing import List
 from openai import OpenAI
@@ -14,6 +15,7 @@ OPENROUTER_MODEL = "google/gemma-4-31b-it:free"
 LOCAL_BASE_URL = "http://localhost:8000/v1"
 LOCAL_MODEL = "local-model"
 RETRY_WAIT_SECONDS = 10
+REQUEST_TIMEOUT_SECONDS = 600
 DEFAULT_JSON_ERROR_DIR = "test_data/json_errors"
 
 
@@ -36,12 +38,14 @@ class OpenAIModel:
         provider: str = "openrouter",
         json_error_dir: str = DEFAULT_JSON_ERROR_DIR,
         json_retry: int = 3,
+        timeout: int = REQUEST_TIMEOUT_SECONDS,
     ):
         self.provider = provider
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.json_error_dir = json_error_dir
         self.json_retry = json_retry
+        self.timeout = timeout
 
         if provider == "local":
             self.model = model or LOCAL_MODEL
@@ -55,10 +59,21 @@ class OpenAIModel:
         else:
             raise ValueError("provider must be 'openrouter' or 'local'")
 
-        self.client = OpenAI(
-            api_key=api_key,
-            base_url=base_url,
-        )
+        self.api_key = api_key
+        self.base_url = base_url
+        self._thread_local = threading.local()
+
+    def _get_client(self):
+        client = getattr(self._thread_local, "client", None)
+        if client is None:
+            client = OpenAI(
+                api_key=self.api_key,
+                base_url=self.base_url,
+                timeout=self.timeout,
+                max_retries=0,
+            )
+            self._thread_local.client = client
+        return client
 
     def generate(
         self,
@@ -90,7 +105,7 @@ class OpenAIModel:
                         "chat_template_kwargs": {"enable_thinking": False},
                     }
 
-                response = self.client.chat.completions.create(**kwargs)
+                response = self._get_client().chat.completions.create(**kwargs)
 
                 texto = [choice.message.content for choice in response.choices]
                 if response_format and self.provider == "local":

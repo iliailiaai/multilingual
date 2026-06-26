@@ -9,7 +9,7 @@ STAMP="${START}_${END}"
 LANGUAGES="en ja fr es zh German Dutch Russian Ukrainian Polish Czech Portuguese Italian Urdu Persian Irish Welsh Arabic Hebrew Finnish Estonian Hungarian Turkish Azerbaijani Kazakh Uzbek Indonesian Thai"
 SOURCE_LANG=en
 LLM_PROVIDER=local
-WORKERS=50
+WORKERS=16
 
 PYTHONPATH=lib python3 data_generation/2_gen_fact_qa.py \
     --domain sports \
