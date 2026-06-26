@@ -258,12 +258,15 @@ class Steer(nn.Module):
         
         for layer_idx, layer in enumerate(layers): 
             module = layer
-            if skip_layers is not None and layer_idx + offset in skip_layers:
+            vector_idx = layer_idx + offset
+            if vector_idx >= len(vector):
+                break
+            if skip_layers is not None and vector_idx in skip_layers:
                 continue
-            v = torch.tensor(vector[layer_idx + offset], device="cuda")
+            v = torch.tensor(vector[vector_idx], device="cuda")
             v_s = None
             if source_vector is not None:
-                v_s = torch.tensor(source_vector[layer_idx + offset], device="cuda")
+                v_s = torch.tensor(source_vector[vector_idx], device="cuda")
             
             if self.arithmetic == "intervene" or self.arithmetic == "alpha":
                 handle = module.register_forward_hook(partial(self.intervene, vector=v, source_vector=v_s, lang=lang, layer_idx=layer_idx))

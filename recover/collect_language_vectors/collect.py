@@ -33,6 +33,7 @@ def main(
         max_seq_length: int,
         max_train_samples: int,
         language: str,
+        num_layers: int = 7,
         batch_size: int = 4,
         preprocessing_num_workers: int = 1,
         split: str = "train",
@@ -97,8 +98,24 @@ def main(
     states = []
     summed_states = None
 
+    def flush_states():
+        nonlocal states, summed_states
+        if not states:
+            return
+        s = torch.stack(states, dim=0).sum(dim=0).numpy()
+        if summed_states is None:
+            summed_states = s
+        else:
+            summed_states += s
+        states = []
+
     data_loader = DataLoader(train_dataset.with_format("torch"), batch_size=batch_size, shuffle=False)
     num_samples = 0
+
+    hidden_state_limit = None
+    if num_layers is not None and num_layers > 0:
+        # HF hidden_states contains embeddings at index 0, then one entry per transformer block.
+        hidden_state_limit = num_layers + 1
 
     for sample in tqdm(data_loader):
         with torch.no_grad():
@@ -107,24 +124,25 @@ def main(
                 attention_mask=sample["attention_mask"].to(model.device), 
                 output_hidden_states=True,
             )
-        state =torch.stack([x.detach().cpu().float() for x in output.hidden_states], dim=1)
+        hidden_states = output.hidden_states
+        if hidden_state_limit is not None:
+            hidden_states = hidden_states[:hidden_state_limit]
+        state = torch.stack([x.detach().cpu().float() for x in hidden_states], dim=1)
         for i in range(len(state)):
             states.append(_aggregate(state[i], attention_mask=sample["attention_mask"][i].detach().cpu()))
             
-        num_samples += batch_size
+        num_samples += sample["input_ids"].shape[0]
         if len(states) > 20:
-            s = np.stack(states, axis=0).sum(axis=0)
-            if summed_states is None:
-                summed_states = s
-            else:
-                summed_states += s   
-            states = []      
+            flush_states()
 
 
 
 
 
     
+    flush_states()
+    if summed_states is None or num_samples == 0:
+        raise ValueError(f"No samples found for language {language}")
     language_vector = summed_states / num_samples
 
     model_id = model_name_or_path.split("/")[-1]
@@ -149,6 +167,7 @@ if __name__ == "__main__":
     parser.add_argument("--max_seq_length", default=512, type=int)
     parser.add_argument("--language", type=str)
     parser.add_argument("--max_train_samples", default=None, type=int)
+    parser.add_argument("--num_layers", default=7, type=int)
     parser.add_argument("--split", default="train", type=str)
     parser.add_argument("--dataset_str", default=None, type=str)
     args = parser.parse_args()
@@ -162,6 +181,7 @@ if __name__ == "__main__":
         max_seq_length=args.max_seq_length,
         language=args.language,
         max_train_samples=args.max_train_samples,
+        num_layers=args.num_layers,
         preprocessing_num_workers=4,
         split=args.split,
         dataset_str=args.dataset_str,

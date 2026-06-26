@@ -12,16 +12,16 @@ PYTHONPATH=lib python3 data_generation/3_gen_cl-kt.py \
     --factqa_dir "test_data/factQA/sports/${STAMP}" \
     --training_docs_dir "test_data/train_docs/sports/${STAMP}" \
     --output_dir test_data/benchmark/sports \
-    --test_languages ${LANGUAGES} \
+    --test_languages ${LANGUAGES}
 
 PYTHONPATH=lib python3 data_generation/3_gen_cl-kt.py \
     --factqa_dir "test_data/factQA/movie/${STAMP}" \
     --training_docs_dir "test_data/train_docs/movie/${STAMP}" \
     --output_dir test_data/benchmark/movie \
-    --test_languages ${LANGUAGES} \
+    --test_languages ${LANGUAGES}
 
 PYTHONPATH=lib python3 data_generation/3_gen_cl-kt.py \
     --factqa_dir "test_data/factQA/music/${STAMP}" \
     --training_docs_dir "test_data/train_docs/music/${STAMP}" \
     --output_dir test_data/benchmark/music \
-    --test_languages ${LANGUAGES} \
+    --test_languages ${LANGUAGES}

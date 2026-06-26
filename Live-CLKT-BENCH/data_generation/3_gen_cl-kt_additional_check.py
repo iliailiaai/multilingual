@@ -11,6 +11,16 @@ from prompts import music_genQA_prompts, movie_genQA_prompts, sports_genQA_promp
 from vllms import VLLMModel
 
 
+LETTERS = ["A", "B", "C", "D"]
+CORRECT_OPTION_ALIASES = (
+    "correct_option",
+    "answer",
+    "correct_answer",
+    "correctOption",
+    "correct option",
+    "Correct Option",
+)
+
 
 def mcq_format(item):
 
@@ -40,11 +50,10 @@ def shuffle_options(qa_pair, rng):
     rng.shuffle(options)
 
     # build new mapping A/B/C/D -> text
-    letters = ["A", "B", "C", "D"]
     new_options = {}
     correct_text = qa_pair["options"][qa_pair["correct_option"]]
     new_correct = None
-    for new_letter, (old_letter, text) in zip(letters, options):
+    for new_letter, (old_letter, text) in zip(LETTERS, options):
         new_options[new_letter] = text
         if text == correct_text:
             new_correct = new_letter
@@ -53,7 +62,50 @@ def shuffle_options(qa_pair, rng):
     qa_pair["correct_option"] = new_correct
     return qa_pair
 
-    
+
+def normalize_qa_pair(qa_pair, qa_fp, idx):
+    if not isinstance(qa_pair, dict):
+        print(f"[WARN] Skipping invalid QA item in {qa_fp}[{idx}]: expected object, got {type(qa_pair).__name__}")
+        return None
+
+    question = qa_pair.get("question")
+    options = qa_pair.get("options")
+    if not question or not isinstance(options, dict):
+        print(f"[WARN] Skipping invalid QA item in {qa_fp}[{idx}]: missing question/options")
+        return None
+
+    missing_options = [letter for letter in LETTERS if letter not in options or options[letter] in (None, "")]
+    if missing_options:
+        print(f"[WARN] Skipping invalid QA item in {qa_fp}[{idx}]: missing options {missing_options}")
+        return None
+
+    correct = None
+    for key in CORRECT_OPTION_ALIASES:
+        if key in qa_pair:
+            correct = qa_pair[key]
+            break
+
+    if isinstance(correct, str):
+        correct = correct.strip()
+        if correct[:1].upper() in LETTERS:
+            correct = correct[:1].upper()
+        else:
+            for letter, text in options.items():
+                if correct == str(text).strip():
+                    correct = letter
+                    break
+
+    if correct not in LETTERS:
+        print(f"[WARN] Skipping invalid QA item in {qa_fp}[{idx}]: missing/invalid correct_option")
+        return None
+
+    normalized = dict(qa_pair)
+    normalized["question"] = question
+    normalized["options"] = {letter: options[letter] for letter in LETTERS}
+    normalized["correct_option"] = correct
+    return normalized
+
+
 def is_known_entity(entity_name, doc_text, lm, gpt, templates, verbose=True):
     if verbose:
         print(f"\n[Entity] {entity_name}")
@@ -165,6 +217,7 @@ def main(
         train_lang_factQA_dir = os.path.join(factqa_dir)
         train_lang_doc_dir = os.path.join(doc_dir, train_lang)
         train_docs, test_mcqs = [], []
+        skipped_invalid_qas = 0
 
         for unit_name in os.listdir(train_lang_factQA_dir):
             #  train doc
@@ -186,8 +239,17 @@ def main(
                 qa_fp = os.path.join(train_lang_factQA_dir, unit_name, f"{test_lang}QA.json")
                 with open(qa_fp, "r", encoding="utf-8") as f:
                     qa_data = json.load(f)
+                if isinstance(qa_data, dict) and "QA" in qa_data:
+                    qa_data = qa_data["QA"]
+                if not isinstance(qa_data, list):
+                    print(f"[WARN] Skipping invalid QA file {qa_fp}: expected list")
+                    continue
                 # print(qa_fp)
                 for idx, qa_pair in enumerate(qa_data):
+                    qa_pair = normalize_qa_pair(qa_pair, qa_fp, idx)
+                    if qa_pair is None:
+                        skipped_invalid_qas += 1
+                        continue
                     qa_pair = shuffle_options(qa_pair, rng)
                     choice = qa_pair['correct_option']
                     test_mcqs.append(
@@ -204,6 +266,8 @@ def main(
 
 
         # ----- Shuffle and split at item-level -----
+        if skipped_invalid_qas:
+            print(f"[WARN] {train_lang}: skipped {skipped_invalid_qas} invalid QA items.")
         qid_groups_mcq = defaultdict(list)
         for item in test_mcqs:
             qid_groups_mcq[item["qid"]].append(item)
