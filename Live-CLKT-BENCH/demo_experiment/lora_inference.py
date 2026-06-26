@@ -58,6 +58,13 @@ def main():
     parser.add_argument("--test_file_path", type=str)
     parser.add_argument("--output_dir", type=str)
     parser.add_argument("--temperature", type=float, default=0.0)
+    parser.add_argument(
+        "--checkpoints",
+        type=str,
+        nargs="+",
+        default=["checkpoint-epoch-3"],
+        help="Checkpoint directories to run, e.g. checkpoint-epoch-1 checkpoint-epoch-3. Defaults to checkpoint-epoch-3.",
+    )
     args = parser.parse_args()
 
     val_data = load_jsonl(args.test_file_path)
@@ -71,16 +78,18 @@ def main():
     if args.model_dir is None:
         raise ValueError("You must provide either --model_id or --model_dir")
 
-    # Loop through checkpoints
-    dirs = [
-        d for d in os.listdir(args.model_dir)
-        if os.path.isdir(os.path.join(args.model_dir, d)) and d.startswith("checkpoint-epoch-")
+    checkpoint_root = os.path.join(args.model_dir, "checkpoints")
+    checkpoint_search_dir = checkpoint_root if os.path.isdir(checkpoint_root) else args.model_dir
+
+    ckpts = [
+        ckpt if ckpt.startswith("checkpoint-epoch-") else f"checkpoint-epoch-{ckpt}"
+        for ckpt in args.checkpoints
     ]
-    ckpts = [f"checkpoint-epoch-{i}" for i in range(1, len(dirs) + 1)]
     for ckpt_name in ckpts:
-        ckpt_dir = os.path.join(args.model_dir, ckpt_name)
+        ckpt_dir = os.path.join(checkpoint_search_dir, ckpt_name)
         if not os.path.isdir(ckpt_dir):
-            continue  # skip missing checkpoints
+            print(f"[WARN] Missing checkpoint, skipping: {ckpt_dir}")
+            continue
         print(f"[INFO] Processing checkpoint: {ckpt_dir}")
 
         save_dir = os.path.join(args.output_dir, os.path.basename(args.model_dir))
@@ -103,4 +112,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

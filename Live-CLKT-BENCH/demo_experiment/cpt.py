@@ -23,6 +23,16 @@ def inspect_lora_modules(model):
     print(f"\nTotal trainable LoRA parameters: {total_lora_params:,}")
 
 
+def list_epoch_checkpoints(path):
+    if not os.path.isdir(path):
+        return []
+    return [
+        os.path.join(path, d)
+        for d in os.listdir(path)
+        if os.path.isdir(os.path.join(path, d)) and d.startswith("checkpoint-epoch-")
+    ]
+
+
 def preprocess_unsupervised(example, tokenizer):
     text = str(example["text"])
     input_ids = tokenizer.encode(text, add_special_tokens=True)
@@ -67,20 +77,28 @@ def main():
     )
     args = parser.parse_args()
 
-    if not os.path.exists(args.output_dir):
-        os.makedirs(args.output_dir, exist_ok=True)
-    else:
-        # Check if training was already completed
-        ckpts = os.listdir(args.output_dir)
-        dirs = [os.path.join(args.output_dir, d) for d in ckpts if os.path.isdir(os.path.join(args.output_dir, d))]
+    checkpoint_root = os.path.join(args.output_dir, "checkpoints")
+    final_dir = os.path.join(args.output_dir, "final")
+    logs_dir = os.path.join(args.output_dir, "logs")
 
-        if len(dirs) == args.num_train_epochs:
+    if not os.path.exists(args.output_dir):
+        os.makedirs(checkpoint_root, exist_ok=True)
+        os.makedirs(final_dir, exist_ok=True)
+        os.makedirs(logs_dir, exist_ok=True)
+    else:
+        checkpoint_dirs = list_epoch_checkpoints(checkpoint_root)
+        if not checkpoint_dirs:
+            checkpoint_dirs = list_epoch_checkpoints(args.output_dir)
+
+        if len(checkpoint_dirs) == args.num_train_epochs:
             print(f"✅ MODEL {args.model_name} ALREADY TRAINED on {args.train_file}")
             return
         else:
             print(f"⚠️ Incomplete training found for {args.model_name}. Cleaning up...")
             shutil.rmtree(args.output_dir)
-            os.makedirs(args.output_dir, exist_ok=True)
+            os.makedirs(checkpoint_root, exist_ok=True)
+            os.makedirs(final_dir, exist_ok=True)
+            os.makedirs(logs_dir, exist_ok=True)
 
     wandb.init(
         project=args.project_name,
@@ -216,22 +234,22 @@ def main():
         # wandb.log({"val/loss": val_loss, "epoch": epoch + 1})
         # val_epoch_losses.append({"epoch": epoch + 1, "loss": val_loss})
 
-        ckpt_dir = os.path.join(args.output_dir, f"checkpoint-epoch-{epoch+1}")
+        ckpt_dir = os.path.join(checkpoint_root, f"checkpoint-epoch-{epoch+1}")
         model.save_pretrained(ckpt_dir)
         tokenizer.save_pretrained(ckpt_dir)
 
         # Save losses to JSON files
-        with open(os.path.join(args.output_dir, "train_step_losses.json"), "w") as f:
+        with open(os.path.join(logs_dir, "train_step_losses.json"), "w") as f:
             json.dump(train_step_losses, f, indent=2)
 
-        # with open(os.path.join(args.output_dir, "val_epoch_losses.json"), "w") as f:
+        # with open(os.path.join(logs_dir, "val_epoch_losses.json"), "w") as f:
         #     json.dump(val_epoch_losses, f, indent=2)
         
-        with open(os.path.join(args.output_dir, "train_epoch_losses.json"), "w") as f:
+        with open(os.path.join(logs_dir, "train_epoch_losses.json"), "w") as f:
             json.dump(train_epoch_losses, f, indent=2)
 
-    model.save_pretrained(args.output_dir)
-    tokenizer.save_pretrained(args.output_dir)
+    model.save_pretrained(final_dir)
+    tokenizer.save_pretrained(final_dir)
     wandb.finish()
 
 if __name__ == "__main__":

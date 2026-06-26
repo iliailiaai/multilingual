@@ -1,6 +1,7 @@
 import json
 import os
 import argparse
+from tqdm import tqdm
 from openai_client import OpenAIModel
 from prompts import music_genQA_prompts, movie_genQA_prompts, sports_genQA_prompts
 
@@ -58,7 +59,11 @@ def gen_FactQA(model, knowledge, source_lang, langs, templates, save_dir):
         verified_qa = []
         verification_logs = []
 
-        for idx, item in enumerate(qa.get("QA", [])):
+        for idx, item in enumerate(tqdm(
+            qa.get("QA", []),
+            desc=f"Verifying QA: {entity_name}",
+            leave=False,
+        )):
             log_entry = verify_qa(
                 model,
                 knowledge,
@@ -84,7 +89,7 @@ def gen_FactQA(model, knowledge, source_lang, langs, templates, save_dir):
 
     # --- Translate ---
     qa_str = json.dumps({"QA": FactQA[source_lang]}, ensure_ascii=False)
-    for lang in langs:
+    for lang in tqdm(langs, desc=f"Translating QA: {entity_name}", leave=False):
         if lang == source_lang:
             continue
         lang_key = "zh" if lang.startswith("zh") else lang
@@ -146,7 +151,8 @@ def main(
     time_stamp = os.path.basename(training_docs_dir)
 
     lang_docs_dir = os.path.join(training_docs_dir, source_lang)
-    for doc_fn in os.listdir(lang_docs_dir):
+    doc_files = sorted(os.listdir(lang_docs_dir))
+    for doc_fn in tqdm(doc_files, desc=f"{domain} FactQA docs ({source_lang})"):
         with open(os.path.join(lang_docs_dir, doc_fn), "r", encoding="utf-8") as f:
             train_docs = json.load(f)
         knowledge_text = train_docs["fact_source"]

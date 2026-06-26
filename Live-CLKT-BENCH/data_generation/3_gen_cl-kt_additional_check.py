@@ -262,7 +262,7 @@ if __name__ == "__main__":
         default=["en", "ja", "fr", "es", "zh"],
         help="List of test language codes"
     )
-    parser.add_argument("--val_ratio", type=float, default=0.2)
+    parser.add_argument("--val_ratio", type=float, default=0.01)
     parser.add_argument(
         "--training_docs_dir", type=str, 
         default="data/train_docs/movie/2025-01-01_2025-07-31"

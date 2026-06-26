@@ -6,7 +6,7 @@ cd "$(dirname "$0")/.."
 START=2025-06-01
 END=2026-06-10
 STAMP="${START}_${END}"
-LANGUAGES="en ja fr es zh"
+LANGUAGES="en ja fr es zh German Dutch Russian Ukrainian Polish Czech Portuguese Italian Urdu Persian Irish Welsh Arabic Hebrew Finnish Estonian Hungarian Turkish Azerbaijani Kazakh Uzbek Indonesian Thai"
 LLM_PROVIDER=local
 
 PYTHONPATH=lib python3 data_generation/1_gen_train_docs.py \

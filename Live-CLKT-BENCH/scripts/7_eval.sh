@@ -5,7 +5,7 @@ cd "$(dirname "$0")/.."
 
 TRAIN_LANG=en
 MODEL_DIR_NAME=Qwen3-1.7B
-CKPT=checkpoint-epoch-1
+CKPT=checkpoint-epoch-3
 
 python3 demo_experiment/eval.py \
     --pred_file "test_data/inference_output/sports/${TRAIN_LANG}/finetune_combined/${MODEL_DIR_NAME}/${CKPT}_pred.jsonl" \
