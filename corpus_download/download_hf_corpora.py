@@ -8,6 +8,7 @@ field, and records exact token counts measured with the selected tokenizer.
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ProcessPoolExecutor, as_completed
 import json
 import logging
 import sys
@@ -168,6 +169,18 @@ def parse_args() -> argparse.Namespace:
         help="Count tokenizer-added special tokens. Default counts the written text only.",
     )
     parser.add_argument("--max-doc-tokens", type=int, default=None)
+    parser.add_argument(
+        "--tokenize-batch-size",
+        type=int,
+        default=256,
+        help="Number of documents to tokenize in one tokenizer call.",
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="Number of corpora to download in parallel. Each worker handles one corpus at a time.",
+    )
     parser.add_argument("--log-every", type=int, default=10_000)
     return parser.parse_args()
 
@@ -187,14 +200,17 @@ def import_dependencies() -> None:
     AutoTokenizer = transformers_auto_tokenizer
 
 
-def setup_logging(output_dir: Path) -> None:
+def setup_logging(output_dir: Path, log_name: str = "download_run.log") -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
-    log_path = output_dir / "download_run.log"
+    log_path = output_dir / log_name
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(message)s",
         handlers=[logging.StreamHandler(sys.stdout), logging.FileHandler(log_path, encoding="utf-8")],
+        force=True,
     )
+    for logger_name in ("httpx", "httpcore", "huggingface_hub", "fsspec"):
+        logging.getLogger(logger_name).setLevel(logging.WARNING)
 
 
 def load_stream(spec: CorpusSpec, trust_remote_code: bool) -> Iterable[dict[str, Any]]:
@@ -260,6 +276,16 @@ def count_tokens(tokenizer: Any, text: str, add_special_tokens: bool) -> int:
     return len(tokenizer.encode(text, add_special_tokens=add_special_tokens))
 
 
+def count_tokens_batch(tokenizer: Any, texts: list[str], add_special_tokens: bool) -> list[int]:
+    encoded = tokenizer(
+        texts,
+        add_special_tokens=add_special_tokens,
+        padding=False,
+        truncation=False,
+    )
+    return [len(input_ids) for input_ids in encoded["input_ids"]]
+
+
 def read_state(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {"rows_seen": 0, "rows_written": 0, "token_count": 0}
@@ -281,6 +307,8 @@ def write_summary(log_file: Path, results: list[CorpusResult], args: argparse.Na
         "created_at": datetime.now(timezone.utc).isoformat(),
         "tokenizer": args.tokenizer,
         "add_special_tokens_to_count": args.add_special_tokens_to_count,
+        "tokenize_batch_size": args.tokenize_batch_size,
+        "workers": args.workers,
         "output_dir": str(args.output_dir),
         "total_tokens": sum(result.token_count for result in results),
         "total_rows": sum(result.rows_written for result in results),
@@ -322,6 +350,7 @@ def download_corpus(
     args: argparse.Namespace,
     log_file: Path,
     results: list[CorpusResult],
+    write_incremental_summary: bool = True,
 ) -> CorpusResult:
     output_file = args.output_dir / f"{spec.key}.jsonl"
     state_file = args.output_dir / f"{spec.key}.state.json"
@@ -355,8 +384,73 @@ def download_corpus(
     stream = load_stream(spec, args.trust_remote_code)
     mode = "a" if args.resume and output_file.exists() else "w"
     completed = False
+    pending: list[tuple[int, str]] = []
 
     with output_file.open(mode, encoding="utf-8") as out:
+        def flush_pending() -> bool:
+            nonlocal completed
+            nonlocal rows_written
+            nonlocal skipped_too_large
+            nonlocal token_count
+
+            if not pending:
+                return False
+
+            batch = pending.copy()
+            pending.clear()
+            token_counts = count_tokens_batch(
+                tokenizer,
+                [text for _, text in batch],
+                args.add_special_tokens_to_count,
+            )
+
+            for _, text, doc_tokens in zip(
+                (source_index for source_index, _ in batch),
+                (text for _, text in batch),
+                token_counts,
+            ):
+                if args.max_doc_tokens is not None and doc_tokens > args.max_doc_tokens:
+                    skipped_too_large += 1
+                    continue
+                if token_count + doc_tokens > spec.max_tokens:
+                    completed = True
+                    return True
+
+                record = {
+                    "text": text,
+                    "source": spec.repo,
+                    "source_config": spec.hf_config,
+                    "language": spec.key,
+                    "language_name": spec.name,
+                    "iso3": spec.iso3,
+                    "kind": spec.kind,
+                    "tokenizer": args.tokenizer,
+                    "token_count": doc_tokens,
+                }
+                out.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+                token_count += doc_tokens
+                rows_written += 1
+
+                if rows_written % args.log_every == 0:
+                    logging.info(
+                        "%s: %s tokens, %s rows written",
+                        spec.key,
+                        f"{token_count:,}",
+                        f"{rows_written:,}",
+                    )
+                    write_json(
+                        state_file,
+                        {
+                            "rows_seen": rows_seen,
+                            "rows_written": rows_written,
+                            "token_count": token_count,
+                            "skipped_empty": skipped_empty,
+                            "skipped_too_large": skipped_too_large,
+                        },
+                    )
+            return False
+
         for source_index, example in enumerate(stream):
             if source_index < rows_seen:
                 continue
@@ -367,47 +461,12 @@ def download_corpus(
                 skipped_empty += 1
                 continue
 
-            doc_tokens = count_tokens(tokenizer, text, args.add_special_tokens_to_count)
-            if args.max_doc_tokens is not None and doc_tokens > args.max_doc_tokens:
-                skipped_too_large += 1
-                continue
-            if token_count + doc_tokens > spec.max_tokens:
-                completed = True
+            pending.append((source_index, text))
+            if len(pending) >= args.tokenize_batch_size and flush_pending():
                 break
 
-            record = {
-                "text": text,
-                "source": spec.repo,
-                "source_config": spec.hf_config,
-                "language": spec.key,
-                "language_name": spec.name,
-                "iso3": spec.iso3,
-                "kind": spec.kind,
-                "tokenizer": args.tokenizer,
-                "token_count": doc_tokens,
-            }
-            out.write(json.dumps(record, ensure_ascii=False) + "\n")
-
-            token_count += doc_tokens
-            rows_written += 1
-
-            if rows_written % args.log_every == 0:
-                logging.info(
-                    "%s: %s tokens, %s rows written",
-                    spec.key,
-                    f"{token_count:,}",
-                    f"{rows_written:,}",
-                )
-                write_json(
-                    state_file,
-                    {
-                        "rows_seen": rows_seen,
-                        "rows_written": rows_written,
-                        "token_count": token_count,
-                        "skipped_empty": skipped_empty,
-                        "skipped_too_large": skipped_too_large,
-                    },
-                )
+        if not completed:
+            flush_pending()
 
     warning = None
     if token_count < min_tokens:
@@ -435,13 +494,36 @@ def download_corpus(
     )
     write_json(state_file, {**asdict(result), "rows_seen": rows_seen})
     results.append(result)
-    write_summary(log_file, results, args)
+    if write_incremental_summary:
+        write_summary(log_file, results, args)
     logging.info("%s done: %s tokens in %s rows", spec.key, f"{token_count:,}", f"{rows_written:,}")
     return result
 
 
+def download_corpus_worker(spec: CorpusSpec, args: argparse.Namespace) -> CorpusResult:
+    setup_logging(args.output_dir, log_name=f"{spec.key}.download_run.log")
+    import_dependencies()
+    if AutoTokenizer is None:
+        raise RuntimeError("Dependencies are not loaded.")
+
+    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer, trust_remote_code=args.trust_remote_code)
+    return download_corpus(
+        spec,
+        tokenizer,
+        args,
+        args.output_dir / f"{spec.key}.summary.json",
+        [],
+        write_incremental_summary=False,
+    )
+
+
 def main() -> None:
     args = parse_args()
+    if args.workers < 1:
+        raise SystemExit("--workers must be >= 1")
+    if args.tokenize_batch_size < 1:
+        raise SystemExit("--tokenize-batch-size must be >= 1")
+
     args.output_dir = args.output_dir.resolve()
     log_file = (args.log_file or (args.output_dir / "download_summary.json")).resolve()
     setup_logging(args.output_dir)
@@ -453,12 +535,30 @@ def main() -> None:
     if AutoTokenizer is None:
         raise RuntimeError("Dependencies are not loaded.")
 
-    logging.info("Loading tokenizer: %s", args.tokenizer)
-    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer, trust_remote_code=args.trust_remote_code)
-
     results: list[CorpusResult] = []
-    for spec in selected_specs:
-        download_corpus(spec, tokenizer, args, log_file, results)
+    if args.workers <= 1:
+        logging.info("Loading tokenizer: %s", args.tokenizer)
+        tokenizer = AutoTokenizer.from_pretrained(args.tokenizer, trust_remote_code=args.trust_remote_code)
+        for spec in selected_specs:
+            download_corpus(spec, tokenizer, args, log_file, results)
+    else:
+        max_workers = min(args.workers, len(selected_specs))
+        logging.info("Downloading %s corpora with %s workers", len(selected_specs), max_workers)
+        order = {spec.key: index for index, spec in enumerate(selected_specs)}
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(download_corpus_worker, spec, args): spec for spec in selected_specs}
+            for future in as_completed(futures):
+                spec = futures[future]
+                result = future.result()
+                results.append(result)
+                results.sort(key=lambda item: order[item.key])
+                write_summary(log_file, results, args)
+                logging.info(
+                    "Worker finished %s: %s tokens in %s rows",
+                    spec.key,
+                    f"{result.token_count:,}",
+                    f"{result.rows_written:,}",
+                )
 
     write_summary(log_file, results, args)
     warnings = [result.warning for result in results if result.warning]

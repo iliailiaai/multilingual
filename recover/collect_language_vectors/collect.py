@@ -4,12 +4,18 @@ import numpy as np
 import os
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
-from datasets import load_dataset
+from datasets import concatenate_datasets, load_dataset
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 
 logger = logging.getLogger(__name__)
+
+
+LANGUAGE_ALIASES = {
+    # FLORES+ can use individual ISO 639-3 codes for some macrolanguages.
+    "est": ["est", "ekk"],
+}
 
 
 def _aggregate(data, attention_mask):
@@ -38,7 +44,19 @@ def main(
         preprocessing_num_workers: int = 1,
         split: str = "train",
         dataset_str: str = None,
+        skip_existing: bool = False,
     ):
+    model_id = model_name_or_path.split("/")[-1]
+    dataset_identifier = dataset_name.split("/")[-1] if dataset_name is not None else train_file.split("/")[-1].split(".")[0] if dataset_str is None else dataset_str
+    name = "full" if max_train_samples is None else str(max_train_samples)
+    folder = "language_vectors_bucket"
+    path = f"{folder}/{dataset_identifier}/{model_id}/{name}/"
+    output_path = f"{path}/{language}.npy"
+
+    if skip_existing and os.path.exists(output_path):
+        print(f"[SKIP] {language}: vector already exists at {output_path}")
+        return
+
     if dataset_name is not None:
         raw_datasets = load_dataset(
             dataset_name,
@@ -58,16 +76,38 @@ def main(
             "cmn": "Hans",
             "arb": "Arab",
         }
-        if language in subset:
-            raw_datasets[split] = raw_datasets[split].filter(lambda x: x["iso_639_3"] == language and x["iso_15924"] == subset[language])
-        else:
-            raw_datasets[split] = raw_datasets[split].filter(lambda x: x["iso_639_3"] == language)
+        filtered_datasets = []
+        matched_languages = []
+        for language_code in LANGUAGE_ALIASES.get(language, [language]):
+            if language_code in subset:
+                candidate = raw_datasets[split].filter(
+                    lambda x, code=language_code: x["iso_639_3"] == code and x["iso_15924"] == subset[code]
+                )
+            else:
+                candidate = raw_datasets[split].filter(lambda x, code=language_code: x["iso_639_3"] == code)
+            candidate_len = len(candidate)
+            print(f"[INFO] {language}: matched {candidate_len} rows for iso_639_3={language_code}")
+            if candidate_len > 0:
+                filtered_datasets.append(candidate)
+                matched_languages.append(language_code)
+
+        if not filtered_datasets:
+            raise ValueError(f"No dataset rows found for language {language}")
+        if matched_languages != [language]:
+            print(f"[INFO] {language}: using FLORES+ iso_639_3={','.join(matched_languages)}")
+        raw_datasets[split] = (
+            filtered_datasets[0]
+            if len(filtered_datasets) == 1
+            else concatenate_datasets(filtered_datasets)
+        )
 
     if max_train_samples is not None:
-        raw_datasets[split] = raw_datasets[split].shuffle(seed=42).select(range(max_train_samples))
+        sample_count = min(max_train_samples, len(raw_datasets[split]))
+        raw_datasets[split] = raw_datasets[split].shuffle(seed=42).select(range(sample_count))
 
     column_names = raw_datasets[split].column_names
     text_column_name = "text" if "text" in column_names else column_names[0]
+    print(f"[INFO] {language}: using {len(raw_datasets[split])} rows from split={split}")
     model = AutoModelForCausalLM.from_pretrained(model_name_or_path, torch_dtype=torch.bfloat16).cuda()
     tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
     if tokenizer.pad_token == None:
@@ -94,6 +134,9 @@ def main(
     )
 
     train_dataset = tokenized_datasets[split]
+    print(f"[INFO] {language}: tokenized dataset has {len(train_dataset)} rows")
+    if len(train_dataset) == 0:
+        raise ValueError(f"No tokenized samples found for language {language}")
 
     states = []
     summed_states = None
@@ -142,18 +185,15 @@ def main(
     
     flush_states()
     if summed_states is None or num_samples == 0:
-        raise ValueError(f"No samples found for language {language}")
+        raise ValueError(
+            f"No samples found for language {language}; "
+            f"filtered_rows={len(raw_datasets[split])}, tokenized_rows={len(train_dataset)}"
+        )
     language_vector = summed_states / num_samples
 
-    model_id = model_name_or_path.split("/")[-1]
-    
-    dataset_identifier = dataset_name.split("/")[-1] if dataset_name is not None else train_file.split("/")[-1].split(".")[0] if dataset_str is None else dataset_str
-    name = "full" if max_train_samples is None else str(max_train_samples)  
-    folder = "language_vectors_bucket"
-    path = f"{folder}/{dataset_identifier}/{model_id}/{name}/"
     if not os.path.exists(path):
         os.makedirs(path)
-    np.save(f"{path}/{language}.npy", language_vector)
+    np.save(output_path, language_vector)
 
 
     
@@ -170,6 +210,7 @@ if __name__ == "__main__":
     parser.add_argument("--num_layers", default=7, type=int)
     parser.add_argument("--split", default="train", type=str)
     parser.add_argument("--dataset_str", default=None, type=str)
+    parser.add_argument("--skip_existing", action="store_true")
     args = parser.parse_args()
 
     print(f"Processing {args.language}")
@@ -185,4 +226,5 @@ if __name__ == "__main__":
         preprocessing_num_workers=4,
         split=args.split,
         dataset_str=args.dataset_str,
+        skip_existing=args.skip_existing,
     )
