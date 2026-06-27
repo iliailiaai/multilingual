@@ -6,7 +6,7 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Runtime language steering for GPT/Qwen-style Megatron-Core models."""
+"""Multilingual CPT patch: runtime language steering for GPT/Qwen-style Megatron-Core models."""
 
 from __future__ import annotations
 

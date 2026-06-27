@@ -178,6 +178,7 @@ def _partition_packed_batch_for_cp(batch: dict[str, torch.Tensor], cp_size: int)
         "cu_seqlens_unpadded_argmin",
         "max_seqlen",
         "token_count",
+        # Multilingual CPT patch: language labels are per-sample metadata, not sequence tensors.
         "language_ids",
         "source_language_ids",
     }
@@ -230,6 +231,7 @@ def get_batch_from_iterator(
         if "cu_seqlens_unpadded_argmin" in batch:
             required_host_keys.add("cu_seqlens_unpadded_argmin")
 
+    # Multilingual CPT patch: carry language metadata to GPU with the microbatch.
     required_device_keys.update(("language_ids", "source_language_ids"))
 
     if not include_full_batch_fields:
@@ -314,6 +316,7 @@ def get_batch(
 
     cp_size = pg_collection.cp.size()
     has_packed = batch.get("cu_seqlens") is not None
+    # Multilingual CPT patch: preserve language labels while CP helpers slice sequence tensors.
     language_ids = batch.get("language_ids")
     source_language_ids = batch.get("source_language_ids")
     if has_packed and cp_size > 1:
@@ -396,6 +399,7 @@ def _forward_step_common(
         "labels": labels,
     }
     if language_ids is not None:
+        # Multilingual CPT patch: decoder forward receives labels and selects one steering vector per sample.
         forward_args["extra_block_kwargs"] = {
             **forward_args.get("extra_block_kwargs", {}),
             "language_ids": language_ids,

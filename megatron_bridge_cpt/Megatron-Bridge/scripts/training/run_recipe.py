@@ -122,6 +122,7 @@ from megatron.bridge.recipes.utils.dataset_utils import (
 )
 from megatron.bridge.training.audio_lm_step import forward_step as audio_lm_forward_step
 from megatron.bridge.training.config import ConfigContainer
+# Multilingual CPT patch: build language-tagged GPT batches and configure fixed-vector steering.
 from megatron.bridge.data.language_tagged_gpt import LanguageTaggedGPTDatasetProvider
 from megatron.bridge.training.finetune import finetune
 from megatron.bridge.training.gpt_step import forward_step as gpt_forward_step
@@ -222,6 +223,7 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
         help="HuggingFace model ID or local path to model directory. "
         "Use a local path for more stable multinode training.",
     )
+    # Multilingual CPT patch: optional dataset manifest and language-vector steering controls.
     parser.add_argument(
         "--language_manifest",
         type=str,
@@ -397,6 +399,7 @@ def main() -> None:
     if args.language_vector_dir is not None and args.language_manifest is None:
         raise ValueError("--language_vector_dir requires --language_manifest")
 
+    # Multilingual CPT patch: replace the recipe dataset with a per-language blend that emits language_ids.
     if args.language_manifest is not None:
         config.dataset = LanguageTaggedGPTDatasetProvider.from_gpt_config(
             config.dataset,
@@ -404,6 +407,7 @@ def main() -> None:
             blend_weight_key=args.language_blend_weight_key,
         )
 
+    # Multilingual CPT patch: the setup hook installs steering before optimizer construction.
     if args.language_vector_dir is not None:
         config.language_steering = LanguageSteeringConfig(
             vector_dir=args.language_vector_dir,

@@ -6,7 +6,7 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Language-tagged GPT pretraining datasets for multilingual steering."""
+"""Multilingual CPT patch: language-tagged GPT datasets for runtime steering."""
 
 from __future__ import annotations
 
