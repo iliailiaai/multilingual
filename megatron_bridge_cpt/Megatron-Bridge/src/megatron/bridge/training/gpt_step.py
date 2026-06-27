@@ -398,7 +398,7 @@ def _forward_step_common(
         "attention_mask": attention_mask,
         "labels": labels,
     }
-    if language_ids is not None:
+    if language_ids is not None and getattr(state.cfg, "language_steering", None) is not None:
         # Multilingual CPT patch: decoder forward receives labels and selects one steering vector per sample.
         forward_args["extra_block_kwargs"] = {
             **forward_args.get("extra_block_kwargs", {}),
