@@ -1,6 +1,6 @@
-# Qwen3-1.7B CPT with Megatron-Bridge
+# Qwen3-1.7B CPT with Megatron-Bridge + Language Steering
 
-Runbook for continued pretraining `Qwen/Qwen3-1.7B` on the local 10B-token corpus.
+Runbook for continued pretraining `Qwen/Qwen3-1.7B` on the local multilingual 10B-token corpus.
 
 This directory does not install dependencies. Run these scripts on the training machine where Megatron-Bridge, Megatron-Core, Transformer Engine, PyTorch, CUDA/NCCL, and the Qwen tokenizer environment are already prepared.
 
@@ -9,19 +9,29 @@ This directory does not install dependencies. Run these scripts on the training 
 - Megatron-Bridge Qwen3 recipe: `qwen3_1p7b_pretrain_config`
 - HF import/export: `examples/conversion/convert_checkpoints.py`
 - Training entrypoint: `scripts/training/run_recipe.py`
-- Pretraining data: Megatron indexed dataset prefix ending in `_text_document`
+- One Megatron indexed dataset prefix per source corpus language
+- Runtime language steering for the first `LANGUAGE_STEERING_LAYERS=7` transformer layers
+- `language_ids` from the dataloader batch to choose the vector per sample
 
 Megatron-Bridge docs say Qwen3 1.7B is supported, Qwen3 0.6B-4B pretrain uses TP=1/PP=1, and LLM pretraining uses `GPTDatasetConfig` with `data_path`, `blend`, or `blend_per_split`.
 
 ## Files
 
 - `env.example.sh` - copy/edit this on the training machine.
-- `prepare_10b_jsonl.py` - combines downloaded corpus JSONL files into one `{"text": ...}` JSONL capped by token count.
-- `scripts/01_prepare_10b_jsonl.sh` - wrapper around `prepare_10b_jsonl.py`.
-- `scripts/02_preprocess_megatron_dataset.sh` - builds Megatron `.bin/.idx`.
+- `prepare_10b_jsonl.py` - writes per-language `{"text": ...}` JSONL files and a language manifest.
+- `scripts/01_prepare_10b_jsonl.sh` - builds per-language raw JSONL files.
+- `scripts/02_preprocess_megatron_dataset.sh` - builds one Megatron `.bin/.idx` prefix per language.
 - `scripts/03_import_hf_to_megatron.sh` - converts HF Qwen3-1.7B to Megatron checkpoint.
-- `scripts/04_train_qwen3_1p7b_cpt.sh` - launches CPT with Megatron-Bridge.
+- `scripts/04_train_qwen3_1p7b_cpt.sh` - launches CPT with language steering.
 - `scripts/05_export_megatron_to_hf.sh` - converts trained Megatron checkpoint back to HF.
+
+Bridge-local changes live in:
+
+- `Megatron-Bridge/src/megatron/bridge/data/language_tagged_gpt.py`
+- `Megatron-Bridge/src/megatron/bridge/training/language_steering.py`
+- patched `Megatron-Bridge/src/megatron/bridge/training/gpt_step.py`
+- patched `Megatron-Bridge/src/megatron/bridge/training/setup.py`
+- patched `Megatron-Bridge/scripts/training/run_recipe.py`
 
 ## 0. Configure
 
@@ -34,11 +44,13 @@ source megatron_bridge_cpt/env.local.sh
 
 Important paths to set:
 
-- `MB_REPO`: Megatron-Bridge repo path, for example `/opt/Megatron-Bridge`.
+- `MB_REPO`: Megatron-Bridge repo path. By default this points to `megatron_bridge_cpt/Megatron-Bridge`.
 - `RAW_CORPUS_DIR`: directory with downloaded `*.jsonl` corpora, for example `corpus_download/data`.
 - `WORKDIR`: fast shared filesystem for prepared data and checkpoints.
+- `LANGUAGE_VECTOR_DIR`: directory with language vectors named like `eng.npy`, `deu.npy`, etc.
+- `PREPROCESS_SCRIPT`: set this if Megatron-LM `tools/preprocess_data.py` is not under `$MB_REPO/3rdparty/Megatron-LM`.
 
-## 1. Build 10B Raw JSONL
+## 1. Build Per-Language 10B Raw JSONL
 
 ```bash
 bash megatron_bridge_cpt/scripts/01_prepare_10b_jsonl.sh
@@ -46,12 +58,21 @@ bash megatron_bridge_cpt/scripts/01_prepare_10b_jsonl.sh
 
 Output:
 
-- `$CPT_JSONL`
-- `$CPT_JSONL.manifest.json`
+- `$LANGUAGE_JSONL_DIR/*.jsonl`
+- `$LANGUAGE_MANIFEST`
 
-The script uses existing per-row `token_count` when present, so it does not need to re-tokenize.
+The manifest stores:
 
-## 2. Preprocess to Megatron Indexed Dataset
+- source corpus language, for example `de` or `en_instruct`
+- steering vector language, for example `deu` or `eng`
+- numeric `language_id`
+- raw JSONL path
+- target Megatron prefix path
+- token/doc counts
+
+For raw instruct rows with `messages` or `conversations`, `prepare_10b_jsonl.py` renders text through the Qwen tokenizer chat template. Already-rendered rows with only `text` are passed through.
+
+## 2. Preprocess Per-Language Megatron Datasets
 
 ```bash
 bash megatron_bridge_cpt/scripts/02_preprocess_megatron_dataset.sh
@@ -59,14 +80,12 @@ bash megatron_bridge_cpt/scripts/02_preprocess_megatron_dataset.sh
 
 Output:
 
-- `${DATA_OUTPUT_PREFIX}_text_document.bin`
-- `${DATA_OUTPUT_PREFIX}_text_document.idx`
-
-The training data prefix is:
-
-```bash
-echo "$DATA_PREFIX"
+```text
+$LANGUAGE_DATA_PREFIX_DIR/<language>/qwen3_cpt_<language>_text_document.bin
+$LANGUAGE_DATA_PREFIX_DIR/<language>/qwen3_cpt_<language>_text_document.idx
 ```
+
+These prefixes are listed in `$LANGUAGE_MANIFEST` and loaded by the custom language-tagged dataset provider.
 
 ## 3. Import HF Checkpoint to Megatron
 
@@ -80,7 +99,7 @@ Output:
 
 This is a model-weight initialization checkpoint for CPT, not a resume checkpoint with optimizer/RNG state.
 
-## 4. Train CPT
+## 4. Train CPT with Language Steering
 
 Fresh CPT from imported Qwen3 weights:
 
@@ -93,6 +112,17 @@ Resume interrupted CPT:
 ```bash
 RESUME=1 bash megatron_bridge_cpt/scripts/04_train_qwen3_1p7b_cpt.sh
 ```
+
+The training script passes:
+
+```bash
+--language_manifest "$LANGUAGE_MANIFEST"
+--language_vector_dir "$LANGUAGE_VECTOR_DIR"
+--language_steering_layers "$LANGUAGE_STEERING_LAYERS"
+--language_vector_layer_offset "$LANGUAGE_VECTOR_LAYER_OFFSET"
+```
+
+The dataloader tags each sample with `language_ids`. The model wrapper subtracts the selected language vector after each of the first 7 transformer layer forwards. It also freezes input embeddings, the first 7 transformer layers, and output embeddings only when they are tied.
 
 For the default `SEQ_LENGTH=4096` and `GLOBAL_BATCH_SIZE=256`, `TRAIN_ITERS=9540` is about:
 
@@ -128,8 +158,10 @@ For 8 GPUs and Qwen3-1.7B:
 - `LR=1e-5`
 - `MIN_LR=1e-6`
 - `TRAIN_ITERS=9540`
+- `LANGUAGE_STEERING_LAYERS=7`
+- `LANGUAGE_STEERING_SCALING=none`
 
-If memory is tight, lower `MICRO_BATCH_SIZE` stays at `1`, lower `GLOBAL_BATCH_SIZE`, or enable recompute overrides manually. If throughput is too low and memory is fine, raise `MICRO_BATCH_SIZE`.
+Keep `PP=1` for the first steering run. Pipeline parallelism can work later, but the first 7 layers and their language ids are easiest to reason about in a single pipeline stage.
 
 ## References
 

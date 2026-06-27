@@ -12,10 +12,14 @@ else
     source "${ROOT_DIR}/megatron_bridge_cpt/env.example.sh"
 fi
 
-mkdir -p "$(dirname "${CPT_JSONL}")"
+mkdir -p "${LANGUAGE_JSONL_DIR}" "${LANGUAGE_DATA_PREFIX_DIR}"
 
 "${PYTHON_BIN}" "${ROOT_DIR}/megatron_bridge_cpt/prepare_10b_jsonl.py" \
     --inputs "${RAW_CORPUS_DIR}"/*.jsonl \
-    --output "${CPT_JSONL}" \
+    --by-language \
+    --output-dir "${LANGUAGE_JSONL_DIR}" \
+    --manifest "${LANGUAGE_MANIFEST}" \
+    --megatron-prefix-dir "${LANGUAGE_DATA_PREFIX_DIR}" \
     --target-tokens "${TARGET_TOKENS}" \
+    --tokenizer "${HF_MODEL}" \
     --shuffle-files

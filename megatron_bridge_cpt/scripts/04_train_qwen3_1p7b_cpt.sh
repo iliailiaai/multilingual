@@ -12,8 +12,12 @@ else
     source "${ROOT_DIR}/megatron_bridge_cpt/env.example.sh"
 fi
 
-if [ ! -f "${DATA_PREFIX}.bin" ] || [ ! -f "${DATA_PREFIX}.idx" ]; then
-    echo "[ERROR] Missing Megatron indexed dataset: ${DATA_PREFIX}.bin/.idx" >&2
+if [ ! -f "${LANGUAGE_MANIFEST}" ]; then
+    echo "[ERROR] Missing language manifest: ${LANGUAGE_MANIFEST}" >&2
+    exit 1
+fi
+if [ ! -d "${LANGUAGE_VECTOR_DIR}" ]; then
+    echo "[ERROR] Missing language vector directory: ${LANGUAGE_VECTOR_DIR}" >&2
     exit 1
 fi
 
@@ -41,12 +45,24 @@ else
     )
 fi
 
+FREEZE_ARG=()
+if [ "${LANGUAGE_STEERING_FREEZE}" != "true" ]; then
+    FREEZE_ARG=(--no_language_steering_freeze)
+fi
+
 torchrun "${TORCHRUN_ARGS[@]}" scripts/training/run_recipe.py \
     --recipe qwen3_1p7b_pretrain_config \
     --dataset llm-pretrain \
     --seq_length "${SEQ_LENGTH}" \
     --hf_path "${HF_MODEL}" \
-    "dataset.blend=[[${DATA_PREFIX}],null]" \
+    --language_manifest "${LANGUAGE_MANIFEST}" \
+    --language_vector_dir "${LANGUAGE_VECTOR_DIR}" \
+    --language_steering_alpha "${LANGUAGE_STEERING_ALPHA}" \
+    --language_steering_scaling "${LANGUAGE_STEERING_SCALING}" \
+    --language_steering_layers "${LANGUAGE_STEERING_LAYERS}" \
+    --language_vector_layer_offset "${LANGUAGE_VECTOR_LAYER_OFFSET}" \
+    --language_blend_weight_key "${LANGUAGE_BLEND_WEIGHT_KEY}" \
+    "${FREEZE_ARG[@]}" \
     "dataset.num_workers=${DATASET_NUM_WORKERS}" \
     "tokenizer.tokenizer_model=${HF_MODEL}" \
     "checkpoint.save=${TRAIN_CKPT}" \
