@@ -60,7 +60,6 @@ do
         --output-prefix "${output_prefix}" \
         --tokenizer-type HuggingFaceTokenizer \
         --tokenizer-model "${HF_MODEL}" \
-        --dataset-impl mmap \
         --append-eod \
         --workers "${PREPROCESS_WORKERS}" \
         --log-interval 10000
