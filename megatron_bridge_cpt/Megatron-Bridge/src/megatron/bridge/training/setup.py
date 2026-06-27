@@ -45,8 +45,6 @@ from megatron.bridge.training.checkpointing import (
 )
 from megatron.bridge.training.config import ConfigContainer
 from megatron.bridge.training.initialize import initialize_megatron, set_jit_fusion_options
-# Multilingual CPT patch: pre-wrap hook installs Qwen/GPT language steering before DDP/optimizer setup.
-from megatron.bridge.training.language_steering import create_language_steering_pre_wrap_hook
 from megatron.bridge.training.optim import setup_optimizer, sync_hybrid_device_optimizer_fp32_master_copies
 from megatron.bridge.training.state import GlobalState
 from megatron.bridge.training.tensor_inspect import (
@@ -219,13 +217,6 @@ def setup(
         peft_hook = _create_peft_pre_wrap_hook(cfg, state)
         _register_pre_wrap_hook(cfg.model, peft_hook)
         print_rank_0("Registered PEFT pre-wrap hook")
-
-    # Multilingual CPT patch: patch transformer-layer forwards and freeze requested modules before wrapping.
-    language_steering_cfg = getattr(cfg, "language_steering", None)
-    if language_steering_cfg is not None:
-        language_steering_hook = create_language_steering_pre_wrap_hook(language_steering_cfg)
-        _register_pre_wrap_hook(cfg.model, language_steering_hook)
-        print_rank_0("Registered language steering pre-wrap hook")
 
     if getattr(cfg.model, "restore_modelopt_state", False):
         from megatron.bridge.training.post_training.checkpointing import load_modelopt_state

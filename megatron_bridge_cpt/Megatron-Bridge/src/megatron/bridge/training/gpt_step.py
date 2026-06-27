@@ -178,9 +178,6 @@ def _partition_packed_batch_for_cp(batch: dict[str, torch.Tensor], cp_size: int)
         "cu_seqlens_unpadded_argmin",
         "max_seqlen",
         "token_count",
-        # Multilingual CPT patch: language labels are per-sample metadata, not sequence tensors.
-        "language_ids",
-        "source_language_ids",
     }
 
     for key, val in batch.items():
@@ -231,9 +228,6 @@ def get_batch_from_iterator(
         if "cu_seqlens_unpadded_argmin" in batch:
             required_host_keys.add("cu_seqlens_unpadded_argmin")
 
-    # Multilingual CPT patch: carry language metadata to GPU with the microbatch.
-    required_device_keys.update(("language_ids", "source_language_ids"))
-
     if not include_full_batch_fields:
         if is_first_pp_stage or include_mtp_inputs:
             required_device_keys.update(("tokens", "position_ids"))
@@ -270,8 +264,6 @@ def get_batch(
     torch.Tensor,
     torch.Tensor | None,
     torch.Tensor | None,
-    torch.Tensor | None,
-    torch.Tensor | None,
 ]:
     """Generate a batch.
 
@@ -283,8 +275,8 @@ def get_batch(
 
     Returns:
         tuple of tensors containing tokens, labels, loss_mask, attention_mask, position_ids,
-        cu_seqlens, cu_seqlens_argmin, max_seqlen, cu_seqlens_unpadded,
-        cu_seqlens_unpadded_argmin, language_ids, and source_language_ids
+        cu_seqlens, cu_seqlens_argmin, max_seqlen, cu_seqlens_unpadded, and
+        cu_seqlens_unpadded_argmin
     """
     # Determine pipeline stage role via process group collection
     model_cfg = getattr(cfg, "model", None)
@@ -301,7 +293,7 @@ def get_batch(
         cfg, pg_collection=pg_collection, is_last=is_last, vp_stage=vp_stage
     )
     if is_middle and not include_full_batch_fields and not include_mtp_inputs:
-        return None, None, None, None, None, None, None, None, None, None, None, None
+        return None, None, None, None, None, None, None, None, None, None
 
     batch = get_batch_from_iterator(
         data_iterator,
@@ -316,18 +308,11 @@ def get_batch(
 
     cp_size = pg_collection.cp.size()
     has_packed = batch.get("cu_seqlens") is not None
-    # Multilingual CPT patch: preserve language labels while CP helpers slice sequence tensors.
-    language_ids = batch.get("language_ids")
-    source_language_ids = batch.get("source_language_ids")
     if has_packed and cp_size > 1:
         batch = _partition_packed_batch_for_cp(batch, cp_size)
     else:
-        batch["language_ids"] = None
-        batch["source_language_ids"] = None
         # slice batch along sequence dimension for context parallelism
         batch = get_batch_on_this_cp_rank(batch, is_hybrid_cp=False, cp_group=pg_collection.cp)
-    batch["language_ids"] = language_ids
-    batch["source_language_ids"] = source_language_ids
 
     return (
         batch["tokens"],
@@ -342,8 +327,6 @@ def get_batch(
         batch.get("max_seqlen"),
         batch.get("cu_seqlens_unpadded"),
         batch.get("cu_seqlens_unpadded_argmin"),
-        batch.get("language_ids"),
-        batch.get("source_language_ids"),
     )
 
 
@@ -381,8 +364,6 @@ def _forward_step_common(
             max_seqlen,
             cu_seqlens_unpadded,
             cu_seqlens_unpadded_argmin,
-            language_ids,
-            source_language_ids,
         ) = get_batch(
             data_iterator,
             state.cfg,
@@ -398,13 +379,6 @@ def _forward_step_common(
         "attention_mask": attention_mask,
         "labels": labels,
     }
-    if language_ids is not None:
-        # Multilingual CPT patch: decoder forward receives labels and selects one steering vector per sample.
-        forward_args["extra_block_kwargs"] = {
-            **forward_args.get("extra_block_kwargs", {}),
-            "language_ids": language_ids,
-            "source_language_ids": source_language_ids,
-        }
 
     # Add packed sequence support
     if cu_seqlens is not None:
@@ -433,12 +407,7 @@ def _forward_step_common(
                 "overlap_moe_expert_parallel_comm must be enabled to return the schedule plan"
             )
             schedule_plan = model.build_schedule_plan(
-                tokens,
-                position_ids,
-                attention_mask,
-                labels=labels,
-                loss_mask=loss_mask,
-                extra_block_kwargs=forward_args.get("extra_block_kwargs"),
+                tokens, position_ids, attention_mask, labels=labels, loss_mask=loss_mask
             )
             return schedule_plan, loss_mask
         else:
