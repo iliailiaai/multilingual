@@ -140,6 +140,12 @@ The training script passes:
 
 The dataloader tags each sample with `language_ids`. The model wrapper subtracts the selected language vector after each of the first 7 transformer layer forwards. It also freezes input embeddings, the first 7 transformer layers, and output embeddings only when they are tied.
 
+To run the same per-language blended CPT dataset without installing steering hooks:
+
+```bash
+LANGUAGE_STEERING_ENABLE=false bash megatron_bridge_cpt/scripts/04_train_qwen3_1p7b_cpt.sh
+```
+
 For the default `SEQ_LENGTH=4096` and `GLOBAL_BATCH_SIZE=256`, `TRAIN_ITERS=9540` is about:
 
 ```text
@@ -175,6 +181,7 @@ For 8 GPUs and Qwen3-1.7B:
 - `MIN_LR=1e-6`
 - `TRAIN_ITERS=9540`
 - `LANGUAGE_STEERING_LAYERS=7`
+- `LANGUAGE_STEERING_ENABLE=true`
 - `LANGUAGE_STEERING_SCALING=none`
 
 Keep `PP=1` for the first steering run. Pipeline parallelism can work later, but the first 7 layers and their language ids are easiest to reason about in a single pipeline stage.
