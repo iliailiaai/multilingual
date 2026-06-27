@@ -47,7 +47,7 @@ docker pull nvcr.io/nvidia/nemo:${TAG}
 cd /home/st107742/projects/multilingual
 
 docker run --rm -it \
-  --gpus '"device=2,3,4"' \
+  --gpus '"device=1"' \
   --ipc=host \
   --ulimit memlock=-1 \
   --ulimit stack=67108864 \
