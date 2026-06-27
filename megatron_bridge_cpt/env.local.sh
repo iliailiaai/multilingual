@@ -4,6 +4,7 @@ DEFAULT_MB_REPO="${MEGATRON_BRIDGE_CPT_DIR}/Megatron-Bridge"
 
 export MB_REPO="${DEFAULT_MB_REPO}"
 export PYTHON_BIN="python"
+export PYTHONPATH="/workdir/megatron_bridge_cpt/Megatron-Bridge/src:/workdir/megatron_bridge_cpt/Megatron-Bridge/3rdparty/Megatron-LM:${PYTHONPATH:-}"
 
 export HF_MODEL="Qwen/Qwen3-1.7B"
 export WORKDIR="/workdir/main/qwen3_1p7b_cpt_10b-st"
