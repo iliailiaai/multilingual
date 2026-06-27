@@ -62,6 +62,8 @@ class Steer(nn.Module):
         self.beta = kwargs.get("beta", 1)
         self.apply_naive_before = kwargs.get("apply_naive_before", True)
         self.parallel = kwargs.get("parallel", False)
+        self.max_steering_layers = kwargs.get("max_steering_layers", 7)
+        self.vector_layer_offset = kwargs.get("vector_layer_offset", 1)
 
         self.train_mode = None
 
@@ -83,37 +85,52 @@ class Steer(nn.Module):
             else:
                 self.adaptive_alpha = ad_class(self.hidden_size, self.hidden_size, num_layers=self.num_layers, crossling=self.crossling is not None, rank=self.rank)
 
-        self.remove_content = kwargs.get("remove_content", False)
+        self.remove_content = kwargs.get("remove_content", True)
         self._init_vector(path, remove_content=self.remove_content)
         
 
     def set_lang(self, lang, anchor=None):
         self.clear()
-        if type(lang) == torch.Tensor:
-            vectors = []
-
-            for l in lang.tolist():
-                if isinstance(l, list):
-                    l = l[0]
-                vectors.append(self.vectors[self.id2lang[l]])
+        if self._is_batched_lang(lang):
+            vectors = [self._vector_for_lang_label(l) for l in self._lang_labels(lang)]
             vector = np.stack(vectors, axis=1)
         else:
-            vector = self.vectors[lang]
+            vector = self._vector_for_lang_label(lang)
         source_vector = None
-        if anchor is not None:
-            if type(anchor) == torch.Tensor:
-                source_vector = []
-
-                for l in anchor.tolist():
-                    if isinstance(l, list):
-                        l = l[0]
-                    source_vector.append(self.vectors[self.id2lang[l]])
+        if anchor is not None and self.arithmetic != "naive":
+            if self._is_batched_lang(anchor):
+                source_vector = [self._vector_for_lang_label(l) for l in self._lang_labels(anchor)]
                 source_vector = np.stack(source_vector, axis=1)
             else:
-                source_vector = self.vectors[anchor]
+                source_vector = self._vector_for_lang_label(anchor)
         self.add_steering(vector, lang, source_vector, skip_layers=self.skip_layers)
         self.lang = lang
         self.anchor = anchor
+
+    def _is_batched_lang(self, lang):
+        if isinstance(lang, torch.Tensor):
+            return lang.ndim > 0
+        if isinstance(lang, np.ndarray):
+            return lang.ndim > 0
+        return isinstance(lang, (list, tuple)) and not isinstance(lang, str)
+
+    def _lang_labels(self, lang):
+        if isinstance(lang, torch.Tensor):
+            labels = lang.detach().cpu().tolist()
+        elif isinstance(lang, np.ndarray):
+            labels = lang.tolist()
+        else:
+            labels = list(lang)
+        return [label[0] if isinstance(label, list) else label for label in labels]
+
+    def _vector_for_lang_label(self, label):
+        if isinstance(label, list):
+            label = label[0]
+        if isinstance(label, torch.Tensor):
+            label = label.item()
+        if not isinstance(label, str):
+            label = self.id2lang[int(label)]
+        return self.vectors[label]
 
 
     def _init_vector(self, path, remove_content):
@@ -142,7 +159,24 @@ class Steer(nn.Module):
             tmp = tmp.repeat(1, s, 1)
         return tmp
 
-    def naive_steer(self, module, args, module_output, vector, source_vector, lang, average=False, layer_idx=None):
+    def _module_device(self, module):
+        try:
+            return next(module.parameters()).device
+        except StopIteration:
+            return next(self.model.parameters()).device
+
+    def naive_steer(
+        self,
+        module,
+        args,
+        module_output,
+        vector,
+        source_vector,
+        lang,
+        average=False,
+        layer_idx=None,
+        is_last_steered_layer=False,
+    ):
         hidden_state = module_output[0]
        
 
@@ -155,11 +189,6 @@ class Steer(nn.Module):
 
        
         v = self._get_vector_subsequence(vector, hidden_state.shape)
-        if source_vector is not None:
-            if len(source_vector.shape) == 2:
-                source_vector = source_vector.unsqueeze(0)
-            v_source = self._get_vector_subsequence(source_vector, hidden_state.shape)
-            v = v - self.beta * v_source
             
         alpha = self.alpha 
         if self.scaling_mode == "relative_norm":
@@ -176,11 +205,11 @@ class Steer(nn.Module):
         elif self.scaling_mode is not None:
             raise ValueError("Unknown scaling mode: {}".format(self.scaling_mode))
     
-        out = (hidden_state + v).to(hidden_state.dtype)
+        out = (hidden_state - v).to(hidden_state.dtype)
         if self.position_idx == 0:
             out[:, :1] = hidden_state[:, :1]
         
-        if layer_idx == self.num_layers - 1:
+        if is_last_steered_layer:
             if self.position_idx == 0:
                 self.prompt_length = s
             self.position_idx += s
@@ -253,26 +282,44 @@ class Steer(nn.Module):
 
     def add_steering(self, vector, lang, source_vector=None, skip_layers=[]):
         layers =  self.model.model.layers
-        offset = 1
-
-        
-        for layer_idx, layer in enumerate(layers): 
-            module = layer
+        offset = self.vector_layer_offset
+        layer_candidates = []
+        for layer_idx, layer in enumerate(layers):
+            if (
+                self.arithmetic == "naive"
+                and self.max_steering_layers is not None
+                and layer_idx >= self.max_steering_layers
+            ):
+                break
             vector_idx = layer_idx + offset
             if vector_idx >= len(vector):
                 break
             if skip_layers is not None and vector_idx in skip_layers:
                 continue
-            v = torch.tensor(vector[vector_idx], device="cuda")
+            layer_candidates.append((layer_idx, layer, vector_idx))
+
+        for candidate_idx, (layer_idx, layer, vector_idx) in enumerate(layer_candidates):
+            module = layer
+            device = self._module_device(module)
+            v = torch.tensor(vector[vector_idx], device=device)
             v_s = None
             if source_vector is not None:
-                v_s = torch.tensor(source_vector[vector_idx], device="cuda")
+                v_s = torch.tensor(source_vector[vector_idx], device=device)
             
             if self.arithmetic == "intervene" or self.arithmetic == "alpha":
                 handle = module.register_forward_hook(partial(self.intervene, vector=v, source_vector=v_s, lang=lang, layer_idx=layer_idx))
                 self.hooks.append(handle)
             elif self.arithmetic == "naive":
-                handle = module.register_forward_hook(partial(self.naive_steer, vector=v, source_vector=v_s, lang=lang, layer_idx=layer_idx))
+                handle = module.register_forward_hook(
+                    partial(
+                        self.naive_steer,
+                        vector=v,
+                        source_vector=v_s,
+                        lang=lang,
+                        layer_idx=layer_idx,
+                        is_last_steered_layer=candidate_idx == len(layer_candidates) - 1,
+                    )
+                )
                 self.hooks.append(handle)
             elif self.arithmetic == "identity":
                 pass
@@ -285,10 +332,21 @@ class Steer(nn.Module):
         self.hooks = []
 
     def forward(self, *args, **kwargs):
-        lang = kwargs.pop("lang", self.lang)
-        source_lang = kwargs.pop("source_lang", self.anchor)
+        lang = kwargs.pop("lang", None)
+        for lang_key in ("language", "lang_id", "lang_ids", "language_id", "language_ids"):
+            if lang is None:
+                lang = kwargs.pop(lang_key, None)
+        if lang is None:
+            lang = self.lang
+
+        source_lang = kwargs.pop("source_lang", None)
+        for source_lang_key in ("source_language", "source_lang_id", "source_lang_ids", "source_language_id", "source_language_ids"):
+            if source_lang is None:
+                source_lang = kwargs.pop(source_lang_key, None)
+        if source_lang is None:
+            source_lang = self.anchor
        
-        if isinstance(lang, torch.Tensor) or (lang is not None and lang != self.lang) :
+        if isinstance(lang, torch.Tensor) or self._is_batched_lang(lang) or (lang is not None and lang != self.lang) :
             self.set_lang(lang, source_lang)
         
         output = self.model(*args, **kwargs)
