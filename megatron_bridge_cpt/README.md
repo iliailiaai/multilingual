@@ -40,6 +40,22 @@ cd /path/to/multilingual
 cp megatron_bridge_cpt/env.example.sh megatron_bridge_cpt/env.local.sh
 vim megatron_bridge_cpt/env.local.sh
 source megatron_bridge_cpt/env.local.sh
+
+export TAG=26.06
+docker pull nvcr.io/nvidia/nemo:${TAG}
+
+cd /home/st107742/projects/multilingual
+
+docker run --rm -it \
+  --gpus '"device=2,3,4"' \
+  --ipc=host \
+  --ulimit memlock=-1 \
+  --ulimit stack=67108864 \
+  -w /workdir \
+  -v "$PWD":/workdir \
+  -v /home/st107742/projects/multilingual/main:/workdir/main \
+  --entrypoint bash \
+  nvcr.io/nvidia/nemo:${TAG}
 ```
 
 Important paths to set:
