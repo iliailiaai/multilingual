@@ -122,8 +122,11 @@ from megatron.bridge.recipes.utils.dataset_utils import (
 )
 from megatron.bridge.training.audio_lm_step import forward_step as audio_lm_forward_step
 from megatron.bridge.training.config import ConfigContainer
+# Multilingual CPT patch: build language-tagged GPT batches and configure fixed-vector steering.
+from megatron.bridge.data.language_tagged_gpt import LanguageTaggedGPTDatasetProvider
 from megatron.bridge.training.finetune import finetune
 from megatron.bridge.training.gpt_step import forward_step as gpt_forward_step
+from megatron.bridge.training.language_steering import LanguageSteeringConfig
 from megatron.bridge.training.llava_step import forward_step as llava_forward_step
 from megatron.bridge.training.nemotron_omni_step import forward_step as nemotron_omni_forward_step
 from megatron.bridge.training.pretrain import pretrain
@@ -219,6 +222,56 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
         default=None,
         help="HuggingFace model ID or local path to model directory. "
         "Use a local path for more stable multinode training.",
+    )
+    # Multilingual CPT patch: optional dataset manifest and language-vector steering controls.
+    parser.add_argument(
+        "--language_manifest",
+        type=str,
+        default=None,
+        help="Manifest produced by megatron_bridge_cpt/prepare_10b_jsonl.py --by-language.",
+    )
+    parser.add_argument(
+        "--language_vector_dir",
+        type=str,
+        default=None,
+        help="Directory with .npy/.pt language vectors for runtime steering.",
+    )
+    parser.add_argument(
+        "--language_steering_alpha",
+        type=float,
+        default=1.0,
+        help="Language steering alpha for scaling modes that use it.",
+    )
+    parser.add_argument(
+        "--language_steering_scaling",
+        type=str,
+        default="none",
+        choices=("none", "factor", "norm", "relative_norm"),
+        help="How to scale language vectors before subtraction.",
+    )
+    parser.add_argument(
+        "--language_steering_layers",
+        type=int,
+        default=7,
+        help="Number of first transformer layers to steer and freeze.",
+    )
+    parser.add_argument(
+        "--language_vector_layer_offset",
+        type=int,
+        default=1,
+        help="Offset from transformer layer index to vector layer index.",
+    )
+    parser.add_argument(
+        "--language_blend_weight_key",
+        type=str,
+        default="written_tokens",
+        help="Manifest field used as per-language blend weight.",
+    )
+    parser.add_argument(
+        "--no_language_steering_freeze",
+        action="store_true",
+        default=False,
+        help="Do not freeze embeddings and steered transformer layers.",
     )
     args, cli_overrides = parser.parse_known_args()
     return args, cli_overrides
@@ -342,6 +395,29 @@ def main() -> None:
         config,
         cli_overrides=cli_overrides or None,
     )
+
+    if args.language_vector_dir is not None and args.language_manifest is None:
+        raise ValueError("--language_vector_dir requires --language_manifest")
+
+    # Multilingual CPT patch: replace the recipe dataset with a per-language blend that emits language_ids.
+    if args.language_manifest is not None:
+        config.dataset = LanguageTaggedGPTDatasetProvider.from_gpt_config(
+            config.dataset,
+            args.language_manifest,
+            blend_weight_key=args.language_blend_weight_key,
+        )
+
+    # Multilingual CPT patch: the setup hook installs steering before optimizer construction.
+    if args.language_vector_dir is not None:
+        config.language_steering = LanguageSteeringConfig(
+            vector_dir=args.language_vector_dir,
+            manifest_path=args.language_manifest,
+            alpha=args.language_steering_alpha,
+            scaling_mode=None if args.language_steering_scaling == "none" else args.language_steering_scaling,
+            max_steering_layers=args.language_steering_layers,
+            vector_layer_offset=args.language_vector_layer_offset,
+            freeze_embeddings_and_steered_layers=not args.no_language_steering_freeze,
+        )
 
     # Ensure dataset.seq_length and model.seq_length stay in sync after CLI overrides
     if (
