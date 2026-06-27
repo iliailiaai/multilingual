@@ -21,6 +21,7 @@ export LANGUAGE_DATA_PREFIX_DIR="${WORKDIR}/megatron_data_by_language"
 export PREPROCESS_WORKERS="32"
 
 export LANGUAGE_VECTOR_DIR="${PROJECT_ROOT}/recover/collect_language_vectors/language_vectors_bucket/flores_plus/Qwen3-1.7B/full"
+export LANGUAGE_STEERING_ENABLE="${LANGUAGE_STEERING_ENABLE:-false}"
 export LANGUAGE_STEERING_ALPHA="1.0"
 export LANGUAGE_STEERING_SCALING="none"
 export LANGUAGE_STEERING_LAYERS="7"
